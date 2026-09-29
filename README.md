@@ -135,6 +135,28 @@ Recipe servers merge with `mcpl-servers.json`. The file wins on conflict, so use
 
 See [`recipes/SETUP.md`](recipes/SETUP.md) for a detailed setup guide for the knowledge-miner recipe.
 
+### Claude subscription provider
+
+The default `anthropic` provider also runs on a Claude subscription (Pro/Max)
+instead of an API key. Install Claude Code, generate a long-lived OAuth token
+with `claude setup-token`, and export it as `ANTHROPIC_AUTH_TOKEN`:
+
+```bash
+export ANTHROPIC_AUTH_TOKEN=sk-ant-oat...
+```
+
+No recipe change is needed — any `anthropic` recipe works. When
+`ANTHROPIC_AUTH_TOKEN` is set it takes precedence over `ANTHROPIC_API_KEY`
+(requests never carry both). Connectome then sends the `oauth-2025-04-20`
+beta header (merged with any `agent.anthropicBetas`) and prepends the Claude
+Code identity block the subscription endpoint requires ahead of the recipe's
+system prompt. Usage draws down the subscription's 5-hour and weekly windows
+rather than per-token billing; the TUI status line and WebUI show them. When
+the quota meter already has a reading that shows a spent window, a 429 parks
+the agent until the window resets instead of retrying; without a reading
+(e.g. the first 429 in a headless run with no viewer, or an unreadable usage
+endpoint) it follows the normal retry path.
+
 ### ChatGPT subscription provider
 
 Install the Codex CLI, sign in with `codex login`, then select the subscription
@@ -207,7 +229,7 @@ option.
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) 20+ and [Bun](https://bun.sh/) runtime
-- An Anthropic API key, OpenAI API key, or the Codex CLI signed in with ChatGPT
+- An Anthropic API key, a Claude subscription OAuth token (`claude setup-token`), an OpenAI API key, or the Codex CLI signed in with ChatGPT
 
 ### Install
 
@@ -219,7 +241,8 @@ npm install
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | (required) | Anthropic API key |
+| `ANTHROPIC_API_KEY` | (required unless `ANTHROPIC_AUTH_TOKEN` is set) | Anthropic API key |
+| `ANTHROPIC_AUTH_TOKEN` | — | Claude subscription OAuth token (`claude setup-token`); takes precedence over `ANTHROPIC_API_KEY` |
 | `OPENAI_API_KEY` | — | OpenAI Platform key for `openai-responses` recipes |
 | `OPENAI_COMPATIBLE_API_KEY` | — | Key for `openai-compatible` recipes (no `OPENAI_API_KEY` fallback by design); omit for local servers |
 | `CODEX_BINARY` | `codex` | Codex CLI executable for `openai-codex` subscription auth |
