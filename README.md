@@ -151,8 +151,11 @@ No recipe change is needed — any `anthropic` recipe works. When
 beta header (merged with any `agent.anthropicBetas`) and prepends the Claude
 Code identity block the subscription endpoint requires ahead of the recipe's
 system prompt. Usage draws down the subscription's 5-hour and weekly windows
-rather than per-token billing; the TUI status line and WebUI show them, and a
-429 from a spent window parks the agent until it resets instead of retrying.
+rather than per-token billing; the TUI status line and WebUI show them. When
+the quota meter already has a reading that shows a spent window, a 429 parks
+the agent until the window resets instead of retrying; without a reading
+(e.g. the first 429 in a headless run with no viewer, or an unreadable usage
+endpoint) it follows the normal retry path.
 
 ### ChatGPT subscription provider
 
