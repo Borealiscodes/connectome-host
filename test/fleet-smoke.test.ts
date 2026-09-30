@@ -10,7 +10,8 @@
  * needs a real ANTHROPIC_API_KEY.  That's manual-test territory.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync, lstatSync, readFileSync, readlinkSync, symlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,6 +35,178 @@ async function waitFor(check: () => boolean, timeoutMs: number, label: string): 
   }
   throw new Error(`waitFor timed out after ${timeoutMs}ms: ${label}`);
 }
+
+describe('FleetModule — unresolved launch artifacts', () => {
+  let tmpDir: string;
+  const fleets: FleetModule[] = [];
+  beforeAll(() => { tmpDir = mkdtempSync(join(tmpdir(), 'fkm-fleet-guard-')); });
+  afterAll(async () => {
+    await Promise.all(fleets.map((fleet) => fleet.stop()));
+    rmSync(tmpDir, { recursive: true, force: true });
+  }, 15_000);
+
+  function makeFleet() {
+    const fleet = new FleetModule({
+      childIndexPath: join(TEST_DIR, 'mock-headless-child.ts'),
+      socketWaitTimeoutMs: 5_000, readyTimeoutMs: 5_000,
+      gracefulShutdownMs: 1_000, sigtermEscalationMs: 500,
+    });
+    fleets.push(fleet);
+    return fleet;
+  }
+  function launch(fleet: FleetModule, dataDir: string) {
+    return fleet.handleToolCall({ id: 'guard-launch', name: 'launch', input: {
+      name: 'guard', recipe: 'mock-recipe', dataDir,
+    } });
+  }
+  async function startOwner(dataDir: string, autoRestart = false,
+    ctx = {} as Parameters<FleetModule['start']>[0]) {
+    const fleet = new FleetModule({
+      childIndexPath: join(TEST_DIR, 'mock-headless-child.ts'),
+      socketWaitTimeoutMs: 5_000, readyTimeoutMs: 5_000,
+      gracefulShutdownMs: 1_000, sigtermEscalationMs: 500,
+      autoStart: [{ name: 'guard', recipe: 'mock-recipe', dataDir, autoRestart,
+        env: { ANTHROPIC_API_KEY: 'sk-test-fleet-guard', ANTHROPIC_BASE_URL: 'http://127.0.0.1:1' } }],
+    });
+    fleets.push(fleet);
+    await fleet.start(ctx);
+    await waitFor(() => fleet.getChildren().get('guard')?.status === 'ready', 10_000, 'mock child ready');
+    return fleet;
+  }
+
+  for (const artifact of ['headless.pid', 'ipc.sock']) {
+    for (const kind of ['file', 'dangling symlink', 'FIFO', 'directory']) {
+      test(`refuses unknown ${artifact} ${kind} without touching it`, async () => {
+        const dataDir = mkdtempSync(join(tmpDir, 'unknown-'));
+        const path = join(dataDir, artifact);
+        if (kind === 'file') writeFileSync(path, 'unknown artifact bytes');
+        if (kind === 'dangling symlink') symlinkSync('missing-target', path);
+        if (kind === 'FIFO') execFileSync('mkfifo', [path]);
+        if (kind === 'directory') mkdirSync(path);
+        const before = lstatSync(path);
+        const fleet = makeFleet();
+        const result = await launch(fleet, dataDir);
+        expect(result.success).toBe(false);
+        expect(result.isError).toBe(true);
+        expect(result.error).toContain('reconcile');
+        expect(fleet.getChildren().size).toBe(0);
+        expect(existsSync(join(dataDir, 'startup.log'))).toBe(false);
+        const after = lstatSync(path);
+        expect(after.ino).toBe(before.ino);
+        expect(after.mode).toBe(before.mode);
+        expect(after.mtimeMs).toBe(before.mtimeMs);
+        if (kind === 'file') expect(readFileSync(path, 'utf8')).toBe('unknown artifact bytes');
+        if (kind === 'dangling symlink') expect(readlinkSync(path)).toBe('missing-target');
+      });
+    }
+  }
+
+  test('non-ENOENT inspection failure refuses launch', async () => {
+    const dataDir = join(tmpDir, 'not-a-directory');
+    writeFileSync(dataDir, 'unchanged');
+    const fleet = makeFleet();
+    const result = await launch(fleet, dataDir);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cannot inspect launch artifact');
+    expect(fleet.getChildren().size).toBe(0);
+    expect(readFileSync(dataDir, 'utf8')).toBe('unchanged');
+  });
+
+  test('fresh parent refuses an occupied dataDir and preserves the owner connection', async () => {
+    const dataDir = join(tmpDir, 'occupied');
+    const owner = await startOwner(dataDir);
+    const child = owner.getChildren().get('guard')!;
+    const pidFile = readFileSync(join(dataDir, 'headless.pid'), 'utf8');
+    const socketInode = lstatSync(child.socketPath).ino;
+    const log = readFileSync(join(dataDir, 'startup.log'), 'utf8');
+    const stranger = makeFleet();
+    await stranger.start({} as Parameters<FleetModule['start']>[0]);
+    expect((await launch(stranger, dataDir)).success).toBe(false);
+    expect(stranger.getChildren().size).toBe(0);
+    expect(readFileSync(join(dataDir, 'headless.pid'), 'utf8')).toBe(pidFile);
+    expect(lstatSync(child.socketPath).ino).toBe(socketInode);
+    expect(readFileSync(join(dataDir, 'startup.log'), 'utf8')).toBe(log);
+    expect(child.process?.exitCode).toBeNull();
+    expect(child.process?.signalCode).toBeNull();
+    const count = child.events.length;
+    expect((await owner.handleToolCall({ id: 'owner-help', name: 'command',
+      input: { name: 'guard', command: '/help' } })).success).toBe(true);
+    await waitFor(() => child.events.slice(count).some((e) => e.type === 'command-output'),
+      3_000, 'original owner still receives output');
+    expect((await launch(owner, dataDir)).error).toContain('already ready');
+    await owner.stop();
+  }, 20_000);
+
+  test('historical crashed record with no ChildProcess cannot authorize cleanup', async () => {
+    let state: unknown = null;
+    const ctx = {
+      setState: (value: unknown) => { state = value; },
+      getState: () => state,
+      pushEvent: () => {}, getModule: () => null,
+    } as unknown as Parameters<FleetModule['start']>[0];
+    const dataDir = join(tmpDir, 'historical');
+    const owner = await startOwner(dataDir, false, ctx);
+    const old = owner.getChildren().get('guard')!;
+    await owner.handleToolCall({ id: 'historical-crash', name: 'command',
+      input: { name: 'guard', command: '/crash' } });
+    await waitFor(() => old.exitedAt !== null && old.process?.exitCode === 1, 5_000, 'historical exit');
+    const pidFile = readFileSync(join(dataDir, 'headless.pid'), 'utf8');
+    const socketInode = lstatSync(old.socketPath).ino;
+    const log = readFileSync(join(dataDir, 'startup.log'), 'utf8');
+    const restored = makeFleet();
+    await restored.start(ctx);
+    expect(restored.getChildren().get('guard')?.process).toBeNull();
+    expect((await launch(restored, dataDir)).success).toBe(false);
+    expect(readFileSync(join(dataDir, 'headless.pid'), 'utf8')).toBe(pidFile);
+    expect(lstatSync(old.socketPath).ino).toBe(socketInode);
+    expect(readFileSync(join(dataDir, 'startup.log'), 'utf8')).toBe(log);
+    await owner.stop();
+    await restored.stop();
+  }, 15_000);
+
+  test('reaped handle cannot clean artifacts from a different generation', async () => {
+    const dataDir = mkdtempSync(join(tmpDir, 'new-generation-'));
+    const owner = await startOwner(dataDir);
+    const old = owner.getChildren().get('guard')!;
+    await owner.handleToolCall({ id: 'generation-crash', name: 'command', input: { name: 'guard', command: '/crash' } });
+    await waitFor(() => old.exitedAt !== null && old.process?.exitCode === 1, 5_000, 'old generation exit');
+    // A different live generation's PID replaces our reaped child's metadata.
+    writeFileSync(join(dataDir, 'headless.pid'), String(process.pid));
+    const inode = lstatSync(old.socketPath).ino;
+    const startup = readFileSync(join(dataDir, 'startup.log'), 'utf8');
+    expect((await launch(owner, dataDir)).success).toBe(false);
+    expect(readFileSync(join(dataDir, 'headless.pid'), 'utf8')).toBe(String(process.pid));
+    expect(lstatSync(old.socketPath).ino).toBe(inode);
+    expect(readFileSync(join(dataDir, 'startup.log'), 'utf8')).toBe(startup);
+    expect(owner.getChildren().get('guard')).toBe(old);
+    await owner.stop();
+  }, 15_000);
+
+  for (const mode of ['manual launch', 'restart', 'autoRestart']) {
+    test(`reaped same-owner crash supports ${mode}`, async () => {
+      const dataDir = mkdtempSync(join(tmpDir, 'crash-'));
+      const owner = await startOwner(dataDir, mode === 'autoRestart');
+      const old = owner.getChildren().get('guard')!;
+      await owner.handleToolCall({ id: 'crash', name: 'command', input: { name: 'guard', command: '/crash' } });
+      await waitFor(() => old.exitedAt !== null && old.process?.exitCode === 1, 5_000, 'owner observes exit');
+      expect(existsSync(join(dataDir, 'headless.pid'))).toBe(true);
+      // A fresh Fleet has no cleanup authority, even after the child is dead.
+      expect((await launch(makeFleet(), dataDir)).success).toBe(false);
+      if (mode === 'manual launch') expect((await launch(owner, dataDir)).success).toBe(true);
+      if (mode === 'restart') expect((await owner.handleToolCall({ id: 'restart', name: 'restart',
+        input: { name: 'guard' } })).success).toBe(true);
+      await waitFor(() => {
+        const next = owner.getChildren().get('guard');
+        return next?.status === 'ready' && next.pid !== old.pid;
+      }, 10_000, 'new child ready');
+      const next = owner.getChildren().get('guard')!;
+      expect(readFileSync(join(dataDir, 'headless.pid'), 'utf8')).toBe(String(next.pid));
+      expect((await owner.handleToolCall({ id: 'graceful-restart', name: 'restart',
+        input: { name: 'guard' } })).success).toBe(true);
+      await owner.stop();
+    }, 25_000);
+  }
+});
 
 describe('FleetModule — Phase 2', () => {
   let tmpDir: string;

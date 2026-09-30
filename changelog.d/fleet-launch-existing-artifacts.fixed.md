@@ -1,0 +1,1 @@
+- Fleet refuses headless launches into data directories with unresolved PID or socket artifacts, preserving existing children while requiring ownership reconciliation before retrying.

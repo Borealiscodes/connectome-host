@@ -32,7 +32,7 @@ import type {
 import { formatZonedDateTime, resolveTimeZone } from '@animalabs/agent-framework';
 import { spawn as spawnProcess, type ChildProcess } from 'node:child_process';
 import { connect as netConnect, type Socket } from 'node:net';
-import { existsSync, mkdirSync, unlinkSync, openSync, closeSync, appendFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, fstatSync, readSync, constants, mkdirSync, unlinkSync, openSync, closeSync, appendFileSync, realpathSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
 import { type IncomingCommand, type WireEvent, type PanelResponseEvent, matchesSubscription } from './fleet-types.js';
 import { loadRecipe } from '../recipe.js';
@@ -575,8 +575,7 @@ export class FleetModule implements Module {
     };
     if (child.env !== undefined) input.env = child.env;
 
-    // Drop the crashed record so handleLaunch can register a fresh one.
-    this.children.delete(child.name);
+    // Retain the reaped process as cleanup authority until handleLaunch replaces it.
 
     setTimeout(() => {
       if (this.stopping) return;
@@ -915,8 +914,6 @@ export class FleetModule implements Module {
         error: `Child '${input.name}' is already ${existing.status}`,
       };
     }
-    // Drop the old record if it had previously exited/crashed — re-spawn replaces.
-    if (existing) this.children.delete(input.name);
 
     const recipePath = isUrlOrAbsolute(input.recipe)
       ? input.recipe
@@ -956,9 +953,50 @@ export class FleetModule implements Module {
       ? (isAbsolute(input.dataDir) ? input.dataDir : resolve(process.cwd(), input.dataDir))
       : resolve(process.cwd(), 'data', input.name);
 
-    mkdirSync(dataDir, { recursive: true });
-
     const socketPath = join(dataDir, 'ipc.sock');
+    if (this.children.get(input.name) !== existing) {
+      return { success: false, isError: true, error: `Child '${input.name}' changed during launch; reconcile before retrying.` };
+    }
+    // Only our own observed, reaped ChildProcess authorizes stale-file cleanup.
+    // Historical/adopted records have no process and cannot grant that authority.
+    if (existing?.process && existing.exitedAt !== null &&
+        (existing.process.exitCode !== null || existing.process.signalCode !== null) &&
+        existing.dataDir === dataDir && existing.socketPath === socketPath) {
+      // The directory may have been reused since that process exited. Bind the
+      // current regular PID file to our dead PID; special files are never read.
+      let fd: number | undefined;
+      try {
+        fd = openSync(join(dataDir, 'headless.pid'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        const stat = fstatSync(fd), buffer = Buffer.alloc(33);
+        if (stat.isFile() && stat.size > 0 && stat.size <= 32) {
+          const size = readSync(fd, buffer, 0, buffer.length, 0);
+          if (size <= 32 && buffer.subarray(0, size).toString('utf8').trim() === String(existing.pid)) {
+            let gone = false;
+            try { process.kill(existing.pid!, 0); }
+            catch (err) { gone = (err as NodeJS.ErrnoException).code === 'ESRCH'; }
+            if (gone) this.cleanupStaleChildFiles({ ...existing, env: existing.env ?? null });
+          }
+        }
+      } catch { /* No attributable metadata: the artifact guard below fails closed. */ }
+      finally { if (fd !== undefined) closeSync(fd); }
+    }
+    for (const artifact of [socketPath, join(dataDir, 'headless.pid')]) {
+      try {
+        lstatSync(artifact); // Includes dangling symlinks and special files; never read/connect.
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        return {
+          success: false, isError: true,
+          error: `Cannot inspect launch artifact '${artifact}'; reconcile access and child ownership before retrying.`,
+        };
+      }
+      return {
+        success: false, isError: true,
+        error: `Unresolved launch artifact '${artifact}'; reconcile the existing child and its artifacts before retrying.`,
+      };
+    }
+
+    mkdirSync(dataDir, { recursive: true });
     const subscription = input.subscription ?? this.config.defaultSubscription;
 
     const child: FleetChild = {
@@ -1194,7 +1232,6 @@ export class FleetModule implements Module {
     if (c.status === 'starting' || c.status === 'ready') {
       await this.killChild(c);
     }
-    this.children.delete(c.name);
     // Restart is implicitly allowed — we're using the exact recipe the child
     // was originally launched with (which already passed the allowlist check).
     return await this.handleLaunch(relaunch, { viaAutoStart: true });
