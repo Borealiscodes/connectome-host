@@ -151,8 +151,10 @@ full semantics of each mode.
 The loaded recipe is saved to `$DATA_DIR/.recipe.json` (mode 0600) in its
 **unresolved** form — `${VAR}` references kept, a URL system prompt kept as
 the URL — and re-resolved against the current environment on each bare start,
-so secrets never land in the data directory and rotated credentials take
-effect on restart. A variable that has disappeared since fails the start
+so the snapshot never holds resolved secrets and rotated credentials take
+effect on restart. (That guarantee is about the snapshot; treat the data
+directory as sensitive anyway — it holds the agent's history, and a fleet
+parent currently persists its children's resolved `env` there, #162.) A variable that has disappeared since fails the start
 loudly instead of falling back to the default recipe.
 
 ### System prompt from URL

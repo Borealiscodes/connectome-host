@@ -109,7 +109,10 @@ A recipe is JSON; the full key set is typed and validated in
 - **Persistence.** The recipe is saved to `$DATA_DIR/.recipe.json` in its
   *unresolved* form (`${VAR}` kept, a URL system prompt kept as the URL),
   mode 0600, and re-resolved against the current environment on resume — so
-  secrets never land in the data dir and rotations take effect on restart.
+  the snapshot never holds resolved secrets and rotations take effect on
+  restart. (This covers the snapshot only: other state in the data dir can
+  still hold secrets — the identity key, and fleet children's resolved `env`,
+  see #162.)
 - **Validation checks values, not spelling.** Bad values, impossible
   combinations (e.g. an instructions path on a mount that can't be written)
   and partial policies are rejected at load, naming the key. Unrecognized keys
@@ -251,8 +254,10 @@ one reducer per process.
   live surgery (roll back to a message, suppress messages, quiesce) with an
   operator log. HTTP: `/healthz`, `/quota`, `/media/…`, `/files/…`,
   `/curve`, `/debug/context[/makeup|coverage|curve|preview|maintenance]`,
-  `/debug/retrieval[/view]`; every inspection endpoint accepts
-  `?scope=<child>` to ask a fleet child instead. Non-loopback binds require
+  `/debug/retrieval[/view]`. `/healthz`, `/quota`, `/media/…` and the
+  `/debug/context*` endpoints accept `?scope=<child>` to ask a fleet child
+  instead (`/curve` passes it through to its data fetch); `/files/…` and
+  `/debug/retrieval*` always answer for the local process. Non-loopback binds require
   basic auth; read-only **observers** authenticate with Ed25519 device keys
   and per-grant scopes. See [`docs/webui-deployment.md`](docs/webui-deployment.md).
 - **Headless IPC** — see [`docs/fleet-protocol.md`](docs/fleet-protocol.md).

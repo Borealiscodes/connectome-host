@@ -147,12 +147,14 @@ GITLAB_TOKEN=glpat-...
 GITLAB_API_URL=https://gitlab.example.com/api/v4
 ```
 
-Optional — the conductor's web UI is protected by Basic-Auth that defaults to `admin` / `admin`. Fine for a laptop; **change it** the moment the machine is reachable by anyone else:
+Strongly recommended — the conductor's web UI is protected by Basic-Auth that defaults to `admin` / `admin`, and `triumvirate.json` binds it on **all interfaces** (`0.0.0.0:7340`). From the first launch, anyone who can reach this machine on port 7340 — including other devices on the same Wi-Fi — can log in with those defaults and see and steer every agent. Set your own credentials before launching:
 
 ```ini
 WEBUI_USERNAME=...
 WEBUI_PASSWORD=...
 ```
+
+If you only need the UI on this machine, also bind it to loopback: in `recipes/triumvirate.json`, add `"host": "127.0.0.1"` to the `webui` block (a loopback bind doesn't require credentials at all).
 
 Bun auto-loads `.env`, so nothing else to wire. If a recipe references a `${VAR}` you haven't set, the child's startup will fail with a clear message telling you which variable is missing and which recipe referenced it.
 
