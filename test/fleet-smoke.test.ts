@@ -10,8 +10,9 @@
  * needs a real ANTHROPIC_API_KEY.  That's manual-test territory.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
-import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync, lstatSync, readFileSync, readlinkSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync, lstatSync, readFileSync, readlinkSync, symlinkSync, renameSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -180,6 +181,33 @@ describe('FleetModule — unresolved launch artifacts', () => {
     expect(readFileSync(join(dataDir, 'startup.log'), 'utf8')).toBe(startup);
     expect(owner.getChildren().get('guard')).toBe(old);
     await owner.stop();
+  }, 15_000);
+
+  test('reaped handle preserves a replacement live socket even with the old PID file', async () => {
+    const dataDir = mkdtempSync(join(tmpDir, 'replaced-socket-'));
+    const owner = await startOwner(dataDir);
+    const old = owner.getChildren().get('guard')!;
+    await owner.handleToolCall({ id: 'socket-generation-crash', name: 'command', input: { name: 'guard', command: '/crash' } });
+    await waitFor(() => old.exitedAt !== null && old.process?.exitCode === 1, 5_000, 'old socket owner exit');
+    const pid = readFileSync(join(dataDir, 'headless.pid'), 'utf8');
+    const startup = readFileSync(join(dataDir, 'startup.log'), 'utf8');
+    // Preserve the original inode and bind a different live server to its path,
+    // reproducing a replacement runtime whose PID-file write failed.
+    renameSync(old.socketPath, old.socketPath + '.retained');
+    const server = createServer(socket => socket.end('replacement-owner'));
+    try {
+      await new Promise<void>((ok, no) => { server.once('error', no); server.listen(old.socketPath, ok); });
+      const inode = lstatSync(old.socketPath).ino;
+      expect((await launch(owner, dataDir)).success).toBe(false);
+      expect(readFileSync(join(dataDir, 'headless.pid'), 'utf8')).toBe(pid);
+      expect(lstatSync(old.socketPath).ino).toBe(inode);
+      expect(readFileSync(join(dataDir, 'startup.log'), 'utf8')).toBe(startup);
+      expect(owner.getChildren().get('guard')).toBe(old);
+      expect(server.listening).toBe(true);
+    } finally {
+      await owner.stop();
+      if(server.listening) await new Promise<void>((ok, no) => server.close(err => err ? no(err) : ok()));
+    }
   }, 15_000);
 
   for (const mode of ['manual launch', 'restart', 'autoRestart']) {

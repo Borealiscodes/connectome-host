@@ -184,6 +184,8 @@ interface FleetChild {
   recipePath: string;
   dataDir: string;
   socketPath: string;
+  /** Ephemeral filesystem identity observed for this spawned child's socket. */
+  ownedSocket?: { dev: bigint; ino: bigint; ctimeNs: bigint };
   pid: number | null;
   process: ChildProcess | null;
   socket: Socket | null;
@@ -974,7 +976,18 @@ export class FleetModule implements Module {
             let gone = false;
             try { process.kill(existing.pid!, 0); }
             catch (err) { gone = (err as NodeJS.ErrnoException).code === 'ESRCH'; }
-            if (gone) this.cleanupStaleChildFiles({ ...existing, env: existing.env ?? null });
+            if (gone) {
+              // A failed PID write can leave our dead PID beside another child's
+              // live socket. Never unlink a socket whose observed identity differs.
+              let attributableSocket = false;
+              try {
+                const socket = lstatSync(socketPath, { bigint: true });
+                attributableSocket = socket.isSocket() && existing.ownedSocket !== undefined &&
+                  socket.dev === existing.ownedSocket.dev && socket.ino === existing.ownedSocket.ino &&
+                  socket.ctimeNs === existing.ownedSocket.ctimeNs;
+              } catch (err) { attributableSocket = (err as NodeJS.ErrnoException).code === 'ENOENT'; }
+              if (attributableSocket) this.cleanupStaleChildFiles({ ...existing, env: existing.env ?? null });
+            }
           }
         }
       } catch { /* No attributable metadata: the artifact guard below fails closed. */ }
@@ -1102,6 +1115,10 @@ export class FleetModule implements Module {
 
     try {
       await this.waitForSocket(child);
+      const socketStat = lstatSync(socketPath, { bigint: true });
+      if (socketStat.isSocket()) child.ownedSocket = {
+        dev: socketStat.dev, ino: socketStat.ino, ctimeNs: socketStat.ctimeNs,
+      };
       await this.connectChildSocket(child);
     } catch (err) {
       try { proc.kill('SIGKILL'); } catch { /* noop */ }

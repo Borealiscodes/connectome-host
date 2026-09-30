@@ -1,1 +1,1 @@
-- Fleet refuses headless launches into data directories with unresolved PID or socket artifacts, preserving existing children while requiring ownership reconciliation before retrying.
+- Fleet refuses headless launches into data directories with unresolved PID or socket artifacts, preserving existing children while requiring ownership reconciliation before retrying. Cleanup also requires the socket identity observed for the owned child, preserving replacement sockets even when PID metadata is stale.
