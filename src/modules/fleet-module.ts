@@ -30,7 +30,7 @@ import type {
   ToolResult,
 } from '@animalabs/agent-framework';
 import { formatZonedDateTime, resolveTimeZone } from '@animalabs/agent-framework';
-import { spawn as spawnProcess, type ChildProcess } from 'node:child_process';
+import { execFile, spawn as spawnProcess, type ChildProcess } from 'node:child_process';
 import { connect as netConnect, type Socket } from 'node:net';
 import { existsSync, lstatSync, fstatSync, readSync, constants, mkdirSync, unlinkSync, openSync, closeSync, appendFileSync, realpathSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
@@ -186,6 +186,8 @@ interface FleetChild {
   socketPath: string;
   /** Ephemeral filesystem identity observed for this spawned child's socket. */
   ownedSocket?: { dev: bigint; ino: bigint; ctimeNs: bigint };
+  /** Ephemeral authority from a successful PID-validated adoption handshake. */
+  adopted?: boolean;
   pid: number | null;
   process: ChildProcess | null;
   socket: Socket | null;
@@ -293,7 +295,7 @@ export class FleetModule implements Module {
       const proc = c.process;
       if (proc && proc.exitCode === null && proc.signalCode === null) {
         try { proc.kill('SIGKILL'); } catch { /* noop */ }
-      } else if (!proc && c.pid !== null && (c.status === 'ready' || c.status === 'starting')) {
+      } else if (!proc && c.adopted && c.pid !== null && (c.status === 'ready' || c.status === 'starting')) {
         try { process.kill(c.pid, 'SIGKILL'); } catch { /* noop */ }
       }
     }
@@ -393,21 +395,18 @@ export class FleetModule implements Module {
     if (!state?.children) return adopted;
 
     for (const [name, p] of Object.entries(state.children)) {
-      // Only living-ish statuses are worth probing.  Anything we previously
-      // marked exited/crashed stays in the record so status/list show it,
-      // but we don't try to adopt.
-      if (p.status !== 'ready' && p.status !== 'starting') {
-        // Copy the record back into our live map as historical context.
+      if (name !== p.name || p.socketPath !== join(p.dataDir, 'ipc.sock')) continue;
+
+      if (!this.canRetryAdoption(p)) {
         this.children.set(name, this.reconstructOrphan(p));
         continue;
       }
-
       const alive = await this.probeLiveness(p);
       if (!alive) {
         // Persisted records and failed probes cannot authorize artifact deletion.
         const orphan = this.reconstructOrphan(p);
-        orphan.status = 'crashed';
-        orphan.exitReason = 'orphaned (parent restarted; child not alive)';
+        orphan.status = this.pidIsGone(p.pid) ? 'crashed' : 'starting';
+        orphan.exitReason = 'adoption unresolved; retry launch or restart to re-probe';
         this.children.set(name, orphan);
         continue;
       }
@@ -423,7 +422,7 @@ export class FleetModule implements Module {
         console.error(`[fleet] failed to adopt "${name}": ${String(err)}`);
         // Persisted records and failed probes cannot authorize artifact deletion.
         const orphan = this.reconstructOrphan(p);
-        orphan.status = 'crashed';
+        orphan.status = 'starting';
         orphan.exitReason = `adopt failed: ${err instanceof Error ? err.message : String(err)}`;
         this.children.set(name, orphan);
       }
@@ -471,14 +470,25 @@ export class FleetModule implements Module {
    * socket file exists on disk.  A true probe of the socket happens in
    * reattachToLivingChild; this is the cheap pre-check.
    */
+  /** Confirmed terminal records cannot authorize a connection to a reused PID. */
+  private canRetryAdoption(p: PersistedChild | FleetChild): boolean {
+    if (p.exitedAt !== null) return false;
+    if (p.status === 'ready' || p.status === 'starting') return true;
+    return p.status === 'crashed' && (
+      p.exitReason?.startsWith('adopt failed:') === true ||
+      p.exitReason === 'orphaned (parent restarted; child not alive)' ||
+      p.exitReason?.startsWith('adoption unresolved;') === true
+    );
+  }
+
   private async probeLiveness(p: PersistedChild): Promise<boolean> {
-    if (p.pid === null) return false;
+    if (p.pid === null || !Number.isSafeInteger(p.pid) || p.pid <= 0) return false;
     try {
       process.kill(p.pid, 0);
     } catch {
       return false;
     }
-    if (!existsSync(p.socketPath)) return false;
+    try { if (!lstatSync(p.socketPath).isSocket()) return false; } catch { return false; }
     return true;
   }
 
@@ -496,6 +506,9 @@ export class FleetModule implements Module {
   private async reattachToLivingChild(p: PersistedChild): Promise<FleetChild> {
     const child = this.reconstructOrphan(p);
     child.status = 'starting';  // transitions to 'ready' via the lifecycle event once reattached
+    child.exitedAt = null;
+    child.exitCode = null;
+    child.exitReason = null;
 
     // Capture the first lifecycle:ready's pid.  We subscribe *before*
     // connecting so we can't miss the event (the child emits it
@@ -532,14 +545,80 @@ export class FleetModule implements Module {
       unsubPidCheck();
     }
 
+    child.adopted = true;
     return child;
   }
 
-  /** Remove leftover PID / socket files for a dead child. */
-  private cleanupStaleChildFiles(p: PersistedChild): void {
-    try { if (existsSync(p.socketPath)) unlinkSync(p.socketPath); } catch { /* noop */ }
-    const pidPath = p.socketPath.replace(/ipc\.sock$/, 'headless.pid');
-    try { if (existsSync(pidPath)) unlinkSync(pidPath); } catch { /* noop */ }
+  private pidIsGone(pid: number | null): boolean {
+    if (pid === null || !Number.isSafeInteger(pid) || pid <= 0) return false;
+    try { process.kill(pid, 0); } catch (err) {
+      return (err as NodeJS.ErrnoException).code === 'ESRCH';
+    }
+    return false;
+  }
+
+  /** Bun 1.3 reports ENOENT for Unix refusals; 1.4 also maps EMFILE to
+   * ECONNREFUSED. The already-required Node runtime preserves the actual error.
+   * Missing Node, spawn failure, timeout, live or unknown endpoints fail closed. */
+  private socketRefusesConnection(socketPath: string): Promise<boolean> {
+    const probe = `const {connect}=require('node:net');
+      const socket=connect(process.argv[1]);
+      socket.once('connect',()=>{socket.destroy();process.exitCode=1;});
+      socket.once('error',error=>{socket.destroy();process.exitCode=error.code==='ECONNREFUSED'?0:1;});`;
+    return new Promise((resolve) => {
+      execFile('node', ['--input-type=commonjs', '-e', probe, socketPath], {
+        env: { PATH: process.env.PATH ?? '' }, timeout: 3_000,
+        killSignal: 'SIGKILL', maxBuffer: 1_024,
+      }, error => resolve(error === null));
+    });
+  }
+
+  /** Reconcile only the matching tracked generation. Identity checks narrow
+   * check/unlink races; they do not provide cross-process locking. */
+  private async cleanupStaleChildFiles(child: FleetChild): Promise<void> {
+    const { name, pid, dataDir, socketPath, startedAt, recipePath } = child;
+    if (socketPath !== join(dataDir, 'ipc.sock') || !this.pidIsGone(pid)) return;
+    if (child.process && (child.exitedAt === null ||
+        (child.process.exitCode === null && child.process.signalCode === null))) return;
+    const pidPath = join(dataDir, 'headless.pid');
+    let fd: number | undefined;
+    try {
+      const metadata = lstatSync(pidPath, { bigint: true });
+      if (!metadata.isFile() || metadata.size <= 0n || metadata.size > 32n) return;
+      fd = openSync(pidPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      const same = (a: typeof metadata, b: typeof metadata): boolean =>
+        a.dev === b.dev && a.ino === b.ino && a.ctimeNs === b.ctimeNs &&
+        a.mode === b.mode && a.size === b.size;
+      if (!same(metadata, fstatSync(fd, { bigint: true }))) return;
+      const buffer = Buffer.alloc(33);
+      const size = readSync(fd, buffer, 0, buffer.length, 0);
+      if (size !== Number(metadata.size) || buffer.subarray(0, size).toString('utf8').trim() !== String(pid)) return;
+      const inspectSocket = (): typeof metadata | null => {
+        try { return lstatSync(socketPath, { bigint: true }); }
+        catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null; throw err; }
+      };
+      const socket = inspectSocket();
+      if (socket) {
+        if (!socket.isSocket()) return;
+        if (child.process && (!child.ownedSocket || socket.dev !== child.ownedSocket.dev ||
+            socket.ino !== child.ownedSocket.ino || socket.ctimeNs !== child.ownedSocket.ctimeNs)) return;
+        if (!await this.socketRefusesConnection(socketPath)) return;
+      }
+      const recordMatches = (): boolean => this.children.get(name) === child && child.name === name &&
+        child.pid === pid && child.dataDir === dataDir && child.socketPath === socketPath &&
+        child.startedAt === startedAt && child.recipePath === recipePath && this.pidIsGone(pid);
+      const socketMatches = (): boolean => {
+        const current = inspectSocket();
+        return socket === null ? current === null : current !== null && same(socket, current);
+      };
+      if (!recordMatches() || !same(metadata, lstatSync(pidPath, { bigint: true })) || !socketMatches()) return;
+      if (socket) unlinkSync(socketPath);
+      // Recheck the remaining metadata immediately before its own unlink.
+      if (!recordMatches() || inspectSocket() !== null ||
+          !same(metadata, lstatSync(pidPath, { bigint: true }))) return;
+      unlinkSync(pidPath);
+    } catch { /* Unknown, replaced or inaccessible evidence is preserved. */ }
+    finally { if (fd !== undefined) closeSync(fd); }
   }
 
   /**
@@ -909,7 +988,8 @@ export class FleetModule implements Module {
     }
 
     const existing = this.children.get(input.name);
-    if (existing && (existing.status === 'starting' || existing.status === 'ready')) {
+    if (existing && (existing.process || existing.adopted) &&
+        (existing.status === 'starting' || existing.status === 'ready')) {
       return {
         success: false,
         isError: true,
@@ -959,39 +1039,25 @@ export class FleetModule implements Module {
     if (this.children.get(input.name) !== existing) {
       return { success: false, isError: true, error: `Child '${input.name}' changed during launch; reconcile before retrying.` };
     }
-    // Only our own observed, reaped ChildProcess authorizes stale-file cleanup.
-    // Historical/adopted records have no process and cannot grant that authority.
-    if (existing?.process && existing.exitedAt !== null &&
-        (existing.process.exitCode !== null || existing.process.signalCode !== null) &&
-        existing.dataDir === dataDir && existing.socketPath === socketPath) {
-      // The directory may have been reused since that process exited. Bind the
-      // current regular PID file to our dead PID; special files are never read.
-      let fd: number | undefined;
-      try {
-        fd = openSync(join(dataDir, 'headless.pid'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-        const stat = fstatSync(fd), buffer = Buffer.alloc(33);
-        if (stat.isFile() && stat.size > 0 && stat.size <= 32) {
-          const size = readSync(fd, buffer, 0, buffer.length, 0);
-          if (size <= 32 && buffer.subarray(0, size).toString('utf8').trim() === String(existing.pid)) {
-            let gone = false;
-            try { process.kill(existing.pid!, 0); }
-            catch (err) { gone = (err as NodeJS.ErrnoException).code === 'ESRCH'; }
-            if (gone) {
-              // A failed PID write can leave our dead PID beside another child's
-              // live socket. Never unlink a socket whose observed identity differs.
-              let attributableSocket = false;
-              try {
-                const socket = lstatSync(socketPath, { bigint: true });
-                attributableSocket = socket.isSocket() && existing.ownedSocket !== undefined &&
-                  socket.dev === existing.ownedSocket.dev && socket.ino === existing.ownedSocket.ino &&
-                  socket.ctimeNs === existing.ownedSocket.ctimeNs;
-              } catch (err) { attributableSocket = (err as NodeJS.ErrnoException).code === 'ENOENT'; }
-              if (attributableSocket) this.cleanupStaleChildFiles({ ...existing, env: existing.env ?? null });
-            }
+    if (existing && existing.dataDir === dataDir && existing.socketPath === socketPath &&
+        existing.recipePath === recipePath) {
+      if (this.canRetryAdoption(existing) && !existing.process && !existing.socket && await this.probeLiveness({ ...existing, env: existing.env ?? null })) {
+        try {
+          const adopted = await this.reattachToLivingChild({ ...existing, env: existing.env ?? null });
+          if (this.children.get(input.name) !== existing) {
+            adopted.socket?.destroy();
+            return { success: false, isError: true, error: `Child '${input.name}' changed during adoption; retry launch.` };
           }
-        }
-      } catch { /* No attributable metadata: the artifact guard below fails closed. */ }
-      finally { if (fd !== undefined) closeSync(fd); }
+          this.children.set(input.name, adopted);
+          this.persistState();
+          return { success: true, data: { name: adopted.name, pid: adopted.pid, status: adopted.status,
+            dataDir: adopted.dataDir, socketPath: adopted.socketPath } };
+        } catch { /* Preserve artifacts and let the refusal explain recovery. */ }
+      }
+      await this.cleanupStaleChildFiles(existing);
+    }
+    if (this.children.get(input.name) !== existing) {
+      return { success: false, isError: true, error: `Child '${input.name}' changed during reconciliation; retry launch.` };
     }
     for (const artifact of [socketPath, join(dataDir, 'headless.pid')]) {
       try {
@@ -1005,7 +1071,9 @@ export class FleetModule implements Module {
       }
       return {
         success: false, isError: true,
-        error: `Unresolved launch artifact '${artifact}'; reconcile the existing child and its artifacts before retrying.`,
+        error: `Unresolved launch artifact '${artifact}'; reconcile '${socketPath}' and '${join(dataDir, 'headless.pid')}'. ` +
+          `Use fleet status for '${input.name}', then fleet launch or restart to retry tracked adoption/recovery; ` +
+          `use fleet kill for an attached live child. Unknown ownership requires operator inspection.`,
       };
     }
 
@@ -1246,7 +1314,7 @@ export class FleetModule implements Module {
       dataDir: c.dataDir,
       subscription: [...c.subscription],
     };
-    if (c.status === 'starting' || c.status === 'ready') {
+    if ((c.process || c.adopted) && (c.status === 'starting' || c.status === 'ready')) {
       await this.killChild(c);
     }
     // Restart is implicitly allowed — we're using the exact recipe the child
@@ -1738,8 +1806,12 @@ export class FleetModule implements Module {
     if (child.status === 'exited' || child.status === 'crashed') return;
     const proc = child.process;
     const pid = child.pid;
-    // Nothing to kill: never spawned and no adopted pid recorded.
-    if (!proc && pid === null) return;
+    if (!proc && !child.adopted) {
+      throw new Error(`Child '${child.name}' is not attached; use fleet launch or restart to retry adoption.`);
+    }
+    if (!proc && (pid === null || !Number.isSafeInteger(pid) || pid <= 0)) {
+      throw new Error(`Child '${child.name}' has no valid adopted PID; retry fleet status/restart.`);
+    }
 
     // Mark intent so the exit handler doesn't trigger autoRestart.
     child.killRequested = true;
@@ -1757,15 +1829,29 @@ export class FleetModule implements Module {
       else if (pid !== null) { try { process.kill(pid, sig); } catch { /* noop */ } }
     };
 
-    if (await waitExit(this.config.gracefulShutdownMs)) return;
-    sendSignal('SIGTERM');
-    if (await waitExit(this.config.sigtermEscalationMs)) return;
-    sendSignal('SIGKILL');
-    await waitExit(2_000);
+    let confirmed = await waitExit(this.config.gracefulShutdownMs);
+    if (!confirmed) {
+      sendSignal('SIGTERM');
+      confirmed = await waitExit(this.config.sigtermEscalationMs);
+    }
+    if (!confirmed) {
+      sendSignal('SIGKILL');
+      confirmed = await waitExit(2_000);
+    }
+    if (!confirmed) throw new Error(`Child '${child.name}' death unconfirmed (pid=${pid}); retry fleet status/restart.`);
+    if (!proc) {
+      child.status = 'exited';
+      child.exitedAt = Date.now();
+      child.exitCode = null; // signal-0 cannot recover the adopted process's exit code.
+      child.exitReason = 'shutdown requested; death confirmed (ESRCH)';
+      child.socket?.destroy();
+      child.socket = null;
+      this.persistState();
+    }
   }
 
   private waitForExit(proc: ChildProcess, timeoutMs: number): Promise<boolean> {
-    if (proc.exitCode !== null) return Promise.resolve(true);
+    if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve(true);
     return new Promise((res) => {
       const timer = setTimeout(() => {
         proc.off('exit', onExit);
@@ -1782,6 +1868,7 @@ export class FleetModule implements Module {
   /** Poll-based liveness for adopted children (no ChildProcess handle).
    *  `kill(pid, 0)` throws ESRCH once the process is gone. */
   private waitForExitByPid(pid: number, timeoutMs: number): Promise<boolean> {
+    if (!Number.isSafeInteger(pid) || pid <= 0) return Promise.resolve(false);
     const deadline = Date.now() + timeoutMs;
     return new Promise((res) => {
       const tick = (): void => {
@@ -1789,8 +1876,8 @@ export class FleetModule implements Module {
           process.kill(pid, 0);
           if (Date.now() >= deadline) return res(false);
           setTimeout(tick, 100);
-        } catch {
-          res(true);  // ESRCH (or EPERM rarely) — assume gone
+        } catch (err) {
+          res((err as NodeJS.ErrnoException).code === 'ESRCH');
         }
       };
       tick();
