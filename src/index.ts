@@ -53,7 +53,8 @@ import { IdentityModule } from './modules/identity-module.js';
 import { McplAdminModule } from './modules/mcpl-admin-module.js';
 import { TtsRelayModule } from './modules/tts-relay-module.js';
 import { InstructionsModule } from './modules/instructions-module.js';
-import { loadMcplServers, applyAgentOverlay, composeMcplChildEnv, DEFAULT_CONFIG_PATH, DEFAULT_AGENT_OVERLAY_PATH } from './mcpl-config.js';
+import { loadMcplServers, applyAgentOverlay, applyRecipeServerOverrides, composeMcplChildEnv, DEFAULT_CONFIG_PATH, DEFAULT_AGENT_OVERLAY_PATH } from './mcpl-config.js';
+import { toolClassConfig } from './tool-lifecycle-config.js';
 import { SessionManager } from './session-manager.js';
 import { resolveAgentName } from './agent-name.js';
 import { generateSessionName } from './synesthete.js';
@@ -450,21 +451,12 @@ async function createFramework(
   for (const [id, recipeEntry] of Object.entries(recipeServers)) {
     const fileEntry = fileServersById.get(id);
     if (fileEntry) {
-      const merged: Record<string, unknown> = { ...fileEntry };
-      if (recipeEntry.channelSubscription !== undefined) merged.channelSubscription = recipeEntry.channelSubscription;
-      if (recipeEntry.toolPrefix !== undefined) merged.toolPrefix = recipeEntry.toolPrefix;
-      if (recipeEntry.enabledFeatureSets !== undefined) merged.enabledFeatureSets = recipeEntry.enabledFeatureSets;
-      if (recipeEntry.disabledFeatureSets !== undefined) merged.disabledFeatureSets = recipeEntry.disabledFeatureSets;
-      if (recipeEntry.enabledTools !== undefined) merged.enabledTools = recipeEntry.enabledTools;
-      if (recipeEntry.disabledTools !== undefined) merged.disabledTools = recipeEntry.disabledTools;
-      if (recipeEntry.reconnect !== undefined) merged.reconnect = recipeEntry.reconnect;
-      if (recipeEntry.reconnectIntervalMs !== undefined) merged.reconnectIntervalMs = recipeEntry.reconnectIntervalMs;
-      if (recipeEntry.reconnectMaxIntervalMs !== undefined) merged.reconnectMaxIntervalMs = recipeEntry.reconnectMaxIntervalMs;
-      // Let a recipe override/adopt WebSocket transport for a file-defined server.
-      if (recipeEntry.url !== undefined) merged.url = recipeEntry.url;
-      if (recipeEntry.transport !== undefined) merged.transport = recipeEntry.transport;
-      if (recipeEntry.token !== undefined) merged.token = recipeEntry.token;
-      if (recipeEntry.access !== undefined) merged.access = recipeEntry.access;
+      // The recipe's policy fields (RECIPE_OVERRIDABLE_SERVER_FIELDS) over the
+      // file's spawn/credential definition.
+      const merged = applyRecipeServerOverrides(
+        fileEntry as unknown as Record<string, unknown>,
+        recipeEntry as unknown as Record<string, unknown>,
+      );
       allServers.push(merged as { id: string; command?: string; url?: string; [k: string]: unknown });
     } else if (recipeEntry.command || recipeEntry.url) {
       // Recipe-defined server (not in the file config). Spread ALL recipe fields
@@ -531,6 +523,12 @@ agents: [agentConfig],
     // Tune-out's subconscious resident (agent-framework#77) — recipe opt-in,
     // passed through verbatim; the framework owns the defaults.
     ...(recipe.subconscious ? { subconscious: recipe.subconscious } : {}),
+    // MCPL RFC-008 tool classes: this host's module table, and the recipe's
+    // operator overrides. Spread as an untyped object so an agent-framework
+    // older than the tool-lifecycle release (which lacks both fields)
+    // typechecks and simply ignores them — no tool is then classed beyond
+    // the framework's own built-ins.
+    ...(toolClassConfig(recipe) as object),
   });
 
   // Wire post-creation hooks

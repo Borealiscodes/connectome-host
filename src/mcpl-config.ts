@@ -7,6 +7,8 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { REFUSAL_REACTION_BASELINE } from '@animalabs/agent-framework';
+import type { RecipeToolLifecycle } from './recipe.js';
+import { validateToolLifecycle } from './tool-lifecycle-config.js';
 
 /** Default config file path, resolved from cwd. */
 export const DEFAULT_CONFIG_PATH = resolve(process.cwd(), 'mcpl-servers.json');
@@ -36,6 +38,8 @@ export interface ServerFileEntry {
    * credential — `access` is a name, not a secret.
    */
   access?: string;
+  /** MCPL tool lifecycle (RFC-007) policy — see RecipeMcpServer.toolLifecycle. */
+  toolLifecycle?: RecipeToolLifecycle;
 }
 
 export interface McplServersFile {
@@ -83,10 +87,43 @@ export function loadMcplServers(configPath: string): LoadedServerConfig[] {
       enabledTools: entry.enabledTools,
       disabledTools: entry.disabledTools,
       channelSubscription: entry.channelSubscription,
+      ...(entry.toolLifecycle !== undefined ? { toolLifecycle: checkedToolLifecycle(entry.toolLifecycle, id) } : {}),
     });
   }
 
   return servers;
+}
+
+function checkedToolLifecycle(value: unknown, id: string): RecipeToolLifecycle {
+  validateToolLifecycle(value, `mcpl-servers.json: mcplServers.${id}.toolLifecycle`);
+  return value as RecipeToolLifecycle;
+}
+
+/**
+ * Policy fields a recipe may set on a server it takes from mcpl-servers.json
+ * by id. The file supplies the spawn command and credentials; the recipe
+ * decides how the agent uses the server.
+ */
+export const RECIPE_OVERRIDABLE_SERVER_FIELDS = [
+  'channelSubscription', 'toolPrefix', 'enabledFeatureSets', 'disabledFeatureSets',
+  'enabledTools', 'disabledTools', 'reconnect', 'reconnectIntervalMs', 'reconnectMaxIntervalMs',
+  // A recipe may adopt WebSocket transport for a file-defined server.
+  'url', 'transport', 'token', 'access',
+  // MCPL RFC-007: observation of the agent's other tool calls is per-recipe
+  // policy, like tool toggles — not a property of where the server came from.
+  'toolLifecycle',
+] as const;
+
+/** A file-defined server with the recipe's policy overrides applied. */
+export function applyRecipeServerOverrides<T extends Record<string, unknown>>(
+  fileEntry: T,
+  recipeEntry: Record<string, unknown>,
+): T & Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...fileEntry };
+  for (const field of RECIPE_OVERRIDABLE_SERVER_FIELDS) {
+    if (recipeEntry[field] !== undefined) merged[field] = recipeEntry[field];
+  }
+  return merged as T & Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
