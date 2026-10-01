@@ -53,7 +53,7 @@ import { IdentityModule } from './modules/identity-module.js';
 import { McplAdminModule } from './modules/mcpl-admin-module.js';
 import { TtsRelayModule } from './modules/tts-relay-module.js';
 import { InstructionsModule } from './modules/instructions-module.js';
-import { loadMcplServers, applyAgentOverlay, applyRecipeServerOverrides, composeMcplChildEnv, DEFAULT_CONFIG_PATH, DEFAULT_AGENT_OVERLAY_PATH } from './mcpl-config.js';
+import { loadMcplServers, applyAgentOverlay, mergeRecipeServers, composeMcplChildEnv, DEFAULT_CONFIG_PATH, DEFAULT_AGENT_OVERLAY_PATH } from './mcpl-config.js';
 import { toolClassConfig } from './tool-lifecycle-config.js';
 import { SessionManager } from './session-manager.js';
 import { resolveAgentName } from './agent-name.js';
@@ -441,29 +441,16 @@ async function createFramework(
   // from channels the agent never asked to listen to.
   const recipeServers = recipe.mcpServers ?? {};
   const fileServers = loadMcplServers(DEFAULT_CONFIG_PATH);
-  const fileServersById = new Map(fileServers.map(s => [s.id, s]));
 
   // A server entry has EITHER a `command` (stdio) or a `url` (WebSocket); the
-  // framework's McplServerConfig now carries both as optional, so this local
-  // type must too. Previously the url-only branch forced `command: undefined!`,
-  // which then reached `spawn(undefined, …)` and crashed a network-MCPL recipe.
-  const allServers: Array<{ id: string; command?: string; url?: string; [k: string]: unknown }> = [];
-  for (const [id, recipeEntry] of Object.entries(recipeServers)) {
-    const fileEntry = fileServersById.get(id);
-    if (fileEntry) {
-      // The recipe's policy fields (RECIPE_OVERRIDABLE_SERVER_FIELDS) over the
-      // file's spawn/credential definition.
-      const merged = applyRecipeServerOverrides(
-        fileEntry as unknown as Record<string, unknown>,
-        recipeEntry as unknown as Record<string, unknown>,
-      );
-      allServers.push(merged as { id: string; command?: string; url?: string; [k: string]: unknown });
-    } else if (recipeEntry.command || recipeEntry.url) {
-      // Recipe-defined server (not in the file config). Spread ALL recipe fields
-      // (command OR url/transport/token, plus policy) verbatim — no fake command.
-      allServers.push({ id, ...recipeEntry } as { id: string; command?: string; url?: string; [k: string]: unknown });
-    }
-  }
+  // framework's McplServerConfig carries both as optional. mergeRecipeServers
+  // applies the recipe's policy overrides (RECIPE_OVERRIDABLE_SERVER_FIELDS)
+  // to file servers it names, passes recipe-defined servers through verbatim,
+  // and rejects an id-only entry the file doesn't define.
+  const allServers = mergeRecipeServers(
+    recipeServers as unknown as Record<string, Record<string, unknown>>,
+    fileServers as unknown as Array<{ id: string } & Record<string, unknown>>,
+  );
 
   // Apply the agent overlay (mcpl-servers.agent.json): servers the agent
   // deployed for itself load unconditionally (no recipe opt-in), and

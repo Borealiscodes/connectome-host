@@ -11,9 +11,12 @@ import { join } from 'node:path';
 
 import { validateRecipe } from '../src/recipe.js';
 import {
+  AGENT_DEPLOY_DENIED_CAPABILITIES,
   applyRecipeServerOverrides,
   loadMcplServers,
+  mergeRecipeServers,
   RECIPE_OVERRIDABLE_SERVER_FIELDS,
+  resolveOverlayEntry,
 } from '../src/mcpl-config.js';
 import { HOST_TOOL_CLASSES, isToolClass, toolClassConfig } from '../src/tool-lifecycle-config.js';
 
@@ -147,5 +150,54 @@ describe('HOST_TOOL_CLASSES', () => {
     expect(cfg.hostToolClasses['lessons--*']).toEqual(['memory']);
     expect(cfg.toolClassOverrides).toEqual({ 'cua--*': ['computer'] });
     expect('toolClassOverrides' in toolClassConfig({})).toBe(false);
+  });
+});
+
+describe('review: an agent cannot grant itself tool-lifecycle observation', () => {
+  test('agent-deployed servers have toolLifecycle denied and any block stripped', () => {
+    expect(AGENT_DEPLOY_DENIED_CAPABILITIES).toContain('toolLifecycle');
+    const resolved = resolveOverlayEntry('spy', {
+      command: 'node',
+      args: ['spy.mjs'],
+      toolLifecycle: { observe: {}, inputs: { classes: 'default' } },
+      enabledCapabilities: ['toolLifecycle.*'],
+    } as never, '/tmp/mcpl-servers.agent.json')!;
+    expect('toolLifecycle' in resolved).toBe(false);
+    expect('enabledCapabilities' in resolved).toBe(false);
+    // The bare parent masks both leaves in the framework's capability mask.
+    expect(resolved.disabledCapabilities).toContain('toolLifecycle');
+  });
+});
+
+describe('review: a recipe can name a file-defined server by id alone', () => {
+  test('validateRecipe accepts an entry with only policy fields', () => {
+    expect(() => validateRecipe({
+      name: 't', agent: { systemPrompt: 's' },
+      mcpServers: { zulip: { toolLifecycle: { observe: {} } } },
+    })).not.toThrow();
+    expect(() => validateRecipe({
+      name: 't', agent: { systemPrompt: 's' }, mcpServers: { zulip: { command: '' } },
+    })).toThrow(/mcpServers\.zulip\.command must be a non-empty string/);
+  });
+
+  test('mergeRecipeServers: id-only resolves to the file definition plus overrides', () => {
+    const file = [{ id: 'zulip', command: 'python', args: ['zulip.py'], env: { KEY: 'k' } }];
+    const [merged] = mergeRecipeServers({ zulip: { toolLifecycle: { observe: {} }, toolPrefix: 'z' } }, file);
+    expect(merged.command).toBe('python');
+    expect(merged.env).toEqual({ KEY: 'k' });
+    expect(merged.toolLifecycle).toEqual({ observe: {} });
+    expect(merged.toolPrefix).toBe('z');
+  });
+
+  test('mergeRecipeServers: the file spawn definition wins over a recipe command', () => {
+    const [merged] = mergeRecipeServers({ zulip: { command: 'other' } }, [{ id: 'zulip', command: 'python' }]);
+    expect(merged.command).toBe('python');
+  });
+
+  test('mergeRecipeServers: recipe-defined servers pass through; unknown id-only entries fail loudly', () => {
+    const [own] = mergeRecipeServers({ avatar: { command: 'node', args: ['a.mjs'] } }, []);
+    expect(own).toEqual({ id: 'avatar', command: 'node', args: ['a.mjs'] });
+    expect(() => mergeRecipeServers({ zulpi: { toolPrefix: 'z' } }, [{ id: 'zulip', command: 'python' }]))
+      .toThrow(/mcpServers\.zulpi has no "command" or "url", and mcpl-servers\.json defines no "zulpi"/);
   });
 });

@@ -1823,10 +1823,15 @@ export function validateRecipe(raw: unknown): Recipe {
         throw new Error(`mcpServers.${id} must be an object`);
       }
       const server = entry as Record<string, unknown>;
-      const hasCommand = typeof server.command === 'string' && server.command;
-      const hasUrl = typeof server.url === 'string' && server.url;
-      if (!hasCommand && !hasUrl) {
-        throw new Error(`mcpServers.${id} must have a "command" string (stdio) or "url" string (websocket)`);
+      // An entry with neither command nor url names a server defined in
+      // mcpl-servers.json and sets only policy fields on it; it is resolved
+      // (or rejected, if the file has no such id) at startup by
+      // mergeRecipeServers. When present, each must be a non-empty string.
+      if (server.command !== undefined && !(typeof server.command === 'string' && server.command)) {
+        throw new Error(`mcpServers.${id}.command must be a non-empty string`);
+      }
+      if (server.url !== undefined && !(typeof server.url === 'string' && server.url)) {
+        throw new Error(`mcpServers.${id}.url must be a non-empty string`);
       }
       if (server.args !== undefined && !Array.isArray(server.args)) {
         throw new Error(`mcpServers.${id}.args must be an array`);

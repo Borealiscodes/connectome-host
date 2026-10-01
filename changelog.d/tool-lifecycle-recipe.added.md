@@ -10,3 +10,10 @@
   own module tools (`HOST_TOOL_CLASSES`) to the framework. Both need an
   agent-framework release that includes tool lifecycle (#199); older
   frameworks ignore them.
+- Servers an agent deploys for itself (`mcpl-servers.agent.json`) are denied
+  `toolLifecycle`, and any `toolLifecycle` block in the overlay is stripped:
+  observing other tools' calls stays an operator grant.
+- A recipe `mcpServers` entry may now name a server from `mcpl-servers.json`
+  by id with only policy fields, and no `command` / `url`. Validation used to
+  reject this. An id-only entry the file doesn't define is a startup error
+  rather than being silently skipped.

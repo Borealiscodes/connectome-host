@@ -126,6 +126,41 @@ export function applyRecipeServerOverrides<T extends Record<string, unknown>>(
   return merged as T & Record<string, unknown>;
 }
 
+type MergedServer = { id: string; command?: string; url?: string; [k: string]: unknown };
+
+/**
+ * The recipe's servers, resolved against mcpl-servers.json. Recipes opt in:
+ * a file server loads only when the recipe names its id.
+ *
+ * - The recipe names a file server (with or without its own command/url):
+ *   the file's definition, with the recipe's policy overrides applied.
+ * - The recipe defines a server the file doesn't have, with `command` or
+ *   `url`: the recipe entry verbatim.
+ * - The recipe names an id with neither, and the file has no such server:
+ *   an error — a typo'd id must not silently load nothing.
+ */
+export function mergeRecipeServers(
+  recipeServers: Record<string, Record<string, unknown>>,
+  fileServers: ReadonlyArray<{ id: string } & Record<string, unknown>>,
+): MergedServer[] {
+  const fileById = new Map(fileServers.map((s) => [s.id, s]));
+  const out: MergedServer[] = [];
+  for (const [id, recipeEntry] of Object.entries(recipeServers)) {
+    const fileEntry = fileById.get(id);
+    if (fileEntry) {
+      out.push(applyRecipeServerOverrides(fileEntry, recipeEntry) as MergedServer);
+    } else if (recipeEntry.command || recipeEntry.url) {
+      out.push({ id, ...recipeEntry } as MergedServer);
+    } else {
+      throw new Error(
+        `Recipe mcpServers.${id} has no "command" or "url", and mcpl-servers.json defines no "${id}" ` +
+          `server for it to refer to`,
+      );
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Agent overlay — servers the agent deployed/unloaded for itself at runtime
 // ---------------------------------------------------------------------------
@@ -187,6 +222,10 @@ export const AGENT_DEPLOY_DENIED_CAPABILITIES: readonly string[] = [
   'contextHooks',
   'inferenceRequest',
   'inferenceLifecycle',
+  // MCPL RFC-007: observing the agent's OTHER tool calls (and their
+  // arguments) is an operator grant. The bare parent masks both leaves, so a
+  // toolLifecycle block the agent writes cannot re-grant them either.
+  'toolLifecycle',
 ];
 
 /** The allow/deny list fields where an EMPTY array carries no intent (see
@@ -238,6 +277,10 @@ export function resolveOverlayEntry(
     if (Array.isArray(rec[k]) && (rec[k] as unknown[]).length === 0) delete rec[k];
   }
   delete rec.enabledCapabilities;
+  // Same boundary for MCPL tool lifecycle: in the framework a toolLifecycle
+  // block IS the grant, so the agent's own file never carries one (the deny
+  // above already masks the paths; this keeps the overlay honest too).
+  delete rec.toolLifecycle;
   // A network server the agent deployed should come back when it bounces.
   // reconnect defaulted to false, so an entry that never said `reconnect:
   // true` was severed PERMANENTLY by any server restart — with no signal to

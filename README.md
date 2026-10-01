@@ -124,7 +124,7 @@ If `systemPrompt` is an HTTP(S) URL (no spaces or newlines), it's fetched as pla
 
 ### MCP server merging
 
-A recipe loads a server from `mcpl-servers.json` by naming its id under `mcpServers`. The file supplies the spawn command and credentials. The recipe may override policy fields: `toolPrefix`, feature-set and tool toggles, reconnect settings, WebSocket transport, `access` and `toolLifecycle` (`RECIPE_OVERRIDABLE_SERVER_FIELDS` in `src/mcpl-config.ts`). A recipe can also define a server the file doesn't have, by giving its own `command` or `url`.
+A recipe loads a server from `mcpl-servers.json` by naming its id under `mcpServers`. The file supplies the spawn command and credentials. The recipe may override policy fields: `toolPrefix`, feature-set and tool toggles, reconnect settings, WebSocket transport, `access` and `toolLifecycle` (`RECIPE_OVERRIDABLE_SERVER_FIELDS` in `src/mcpl-config.ts`). The recipe entry for a file server may carry only policy fields; it needs no `command` or `url`. An id-only entry that the file doesn't define is a startup error. A recipe can also define a server the file doesn't have, by giving its own `command` or `url`.
 
 ### Tool lifecycle and tool classes (MCPL RFC-007 / RFC-008)
 
@@ -160,7 +160,9 @@ Third-party MCP servers never declare a class, so class them in the recipe:
 }
 ```
 
-An unclassed tool is treated as the most restrictive class: observable that it ran, never what it was given. These settings take effect with an agent-framework that includes tool lifecycle (anima-research/agent-framework#199); older ones ignore them.
+An unclassed tool is treated as the most restrictive class: observable that it ran, never what it was given.
+
+Servers an agent deploys for itself (`mcpl-servers.agent.json`) can never hold either permission. The overlay denies `toolLifecycle` and strips any `toolLifecycle` block, as it already does for context hooks and server-initiated inference. To let such a server observe, the operator moves it into the recipe. These settings take effect with an agent-framework that includes tool lifecycle (anima-research/agent-framework#199); older ones ignore them.
 
 ### Included recipes
 
