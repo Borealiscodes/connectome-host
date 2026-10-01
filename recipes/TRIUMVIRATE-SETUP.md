@@ -154,7 +154,7 @@ WEBUI_USERNAME=...
 WEBUI_PASSWORD=...
 ```
 
-If you only need the UI on this machine, also bind it to loopback: in `recipes/triumvirate.json`, add `"host": "127.0.0.1"` to the `webui` block (a loopback bind doesn't require credentials at all).
+If you only need the UI on this machine, also bind it to loopback: in `recipes/triumvirate.json`, add `"host": "127.0.0.1"` to the `webui` block. Loopback is the one bind the server will start on without `basicAuth`, but this recipe still configures it, and configured credentials are enforced on every bind — so you'll still get a login prompt. Remove the `basicAuth` block as well if you want a credential-free local UI.
 
 Bun auto-loads `.env`, so nothing else to wire. If a recipe references a `${VAR}` you haven't set, the child's startup will fail with a clear message telling you which variable is missing and which recipe referenced it.
 

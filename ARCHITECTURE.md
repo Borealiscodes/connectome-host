@@ -109,10 +109,13 @@ A recipe is JSON; the full key set is typed and validated in
 - **Persistence.** The recipe is saved to `$DATA_DIR/.recipe.json` in its
   *unresolved* form (`${VAR}` kept, a URL system prompt kept as the URL),
   mode 0600, and re-resolved against the current environment on resume — so
-  the snapshot never holds resolved secrets and rotations take effect on
-  restart. (This covers the snapshot only: other state in the data dir can
-  still hold secrets — the identity key, and fleet children's resolved `env`,
-  see #162.)
+  rotations take effect on restart. Two fields are stored resolved instead:
+  fleet children's `recipe` and extensions' `path`, which must be made
+  absolute against the original source directory. A `${VAR}` interpolated
+  into one of them (a token in a child-recipe URL, say) is written to the
+  snapshot as its value, so keep secrets out of those two fields. Other state
+  in the data dir can hold secrets too — the identity key, and fleet
+  children's resolved `env` (#162).
 - **Validation checks values, not spelling.** Bad values, impossible
   combinations (e.g. an instructions path on a mount that can't be written)
   and partial policies are rejected at load, naming the key. Unrecognized keys
