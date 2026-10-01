@@ -210,6 +210,44 @@ describe('FleetModule — unresolved launch artifacts', () => {
     }
   }, 15_000);
 
+  for (const failure of ['dead persisted PID', 'adoption PID mismatch']) {
+    test(`restored parent preserves replacement artifacts after ${failure}`, async () => {
+      let state: any;
+      const ownerCtx = { setState: (value: unknown) => { state = value; }, getState: () => state,
+        pushEvent: () => {}, getModule: () => null } as unknown as Parameters<FleetModule['start']>[0];
+      const dataDir = mkdtempSync(join(tmpDir, 'restore-replacement-'));
+      const owner = await startOwner(dataDir, false, ownerCtx);
+      const old = owner.getChildren().get('guard')!;
+      const persisted = JSON.parse(JSON.stringify(state)); // Last ready state before parent crash.
+      await owner.handleToolCall({ id: 'restore-crash', name: 'command', input: { name: 'guard', command: '/crash' } });
+      await waitFor(() => old.exitedAt !== null && old.process?.exitCode === 1, 5_000, 'persisted owner exit');
+      if (failure === 'adoption PID mismatch') persisted.children.guard.pid = process.pid;
+      const pidFile = readFileSync(join(dataDir, 'headless.pid'), 'utf8');
+      const startup = readFileSync(join(dataDir, 'startup.log'), 'utf8');
+      renameSync(old.socketPath, old.socketPath + '.retained');
+      const server = createServer(socket => {
+        socket.on('error', () => {});
+        socket.write(JSON.stringify({ type: 'lifecycle', phase: 'ready', pid: old.pid }) + '\n');
+      });
+      const restored = makeFleet();
+      try {
+        await new Promise<void>((ok, no) => { server.once('error', no); server.listen(old.socketPath, ok); });
+        const inode = lstatSync(old.socketPath).ino;
+        const restoredCtx = { ...ownerCtx, getState: () => persisted, setState: () => {} };
+        await restored.start(restoredCtx);
+        expect(readFileSync(join(dataDir, 'headless.pid'), 'utf8')).toBe(pidFile);
+        expect(lstatSync(old.socketPath).ino).toBe(inode);
+        expect(restored.getChildren().get('guard')?.status).toBe('crashed');
+        expect((await launch(restored, dataDir)).success).toBe(false);
+        expect(readFileSync(join(dataDir, 'startup.log'), 'utf8')).toBe(startup);
+        expect(server.listening).toBe(true);
+      } finally {
+        await restored.stop(); await owner.stop();
+        if (server.listening) await new Promise<void>((ok, no) => server.close(err => err ? no(err) : ok()));
+      }
+    }, 15_000);
+  }
+
   for (const mode of ['manual launch', 'restart', 'autoRestart']) {
     test(`reaped same-owner crash supports ${mode}`, async () => {
       const dataDir = mkdtempSync(join(tmpDir, 'crash-'));

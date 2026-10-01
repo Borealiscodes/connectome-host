@@ -314,7 +314,7 @@ export class FleetModule implements Module {
     // First, try to adopt any still-alive children from a prior parent run.
     // Adoption is best-effort: for each persisted child we probe liveness
     // (PID + socket connect) and, if responsive, reattach without respawn.
-    // Dead children get cleaned up and may be respawned below.
+    // Unresolved orphan artifacts are preserved; the launch guard below refuses them.
     const adoptedNames = await this.adoptPersistedChildren();
 
     // Kick off autoStart children concurrently; errors don't block framework
@@ -376,8 +376,8 @@ export class FleetModule implements Module {
   /**
    * Probe persisted children for liveness and reattach to the live ones.
    * Returns the set of names we successfully adopted so autoStart can
-   * skip them.  For each dead orphan, we clean up the stale socket/pid
-   * files so fresh spawns don't trip over them.
+   * skip them. Historical state does not authenticate the current socket/PID
+   * artifacts; preserve them for ownership reconciliation if adoption fails.
    */
   private async adoptPersistedChildren(): Promise<Set<string>> {
     const adopted = new Set<string>();
@@ -404,7 +404,7 @@ export class FleetModule implements Module {
 
       const alive = await this.probeLiveness(p);
       if (!alive) {
-        this.cleanupStaleChildFiles(p);
+        // Persisted records and failed probes cannot authorize artifact deletion.
         const orphan = this.reconstructOrphan(p);
         orphan.status = 'crashed';
         orphan.exitReason = 'orphaned (parent restarted; child not alive)';
@@ -412,8 +412,8 @@ export class FleetModule implements Module {
         continue;
       }
 
-      // Attempt to reattach to its socket.  If anything in this fails,
-      // fall back to treating it as dead.
+      // Attempt to reattach. Failure leaves a blocked historical record;
+      // it does not prove that the socket belongs to a dead process.
       try {
         const reattached = await this.reattachToLivingChild(p);
         this.children.set(name, reattached);
@@ -421,7 +421,7 @@ export class FleetModule implements Module {
         console.error(`[fleet] adopted "${name}" (pid=${p.pid}, socket=${p.socketPath})`);
       } catch (err) {
         console.error(`[fleet] failed to adopt "${name}": ${String(err)}`);
-        this.cleanupStaleChildFiles(p);
+        // Persisted records and failed probes cannot authorize artifact deletion.
         const orphan = this.reconstructOrphan(p);
         orphan.status = 'crashed';
         orphan.exitReason = `adopt failed: ${err instanceof Error ? err.message : String(err)}`;
