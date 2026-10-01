@@ -46,9 +46,10 @@ describe('FleetModule — unresolved launch artifacts', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   }, 15_000);
 
-  function makeFleet() {
+  function makeFleet(defaultSubscription?: string[]) {
     const fleet = new FleetModule({
       childIndexPath: join(TEST_DIR, 'mock-headless-child.ts'),
+      defaultSubscription,
       socketWaitTimeoutMs: 5_000, readyTimeoutMs: 5_000,
       gracefulShutdownMs: 1_000, sigtermEscalationMs: 500,
     });
@@ -61,12 +62,12 @@ describe('FleetModule — unresolved launch artifacts', () => {
     } });
   }
   async function startOwner(dataDir: string, autoRestart = false,
-    ctx = {} as Parameters<FleetModule['start']>[0]) {
+    ctx = {} as Parameters<FleetModule['start']>[0], subscription?: string[]) {
     const fleet = new FleetModule({
       childIndexPath: join(TEST_DIR, 'mock-headless-child.ts'),
       socketWaitTimeoutMs: 5_000, readyTimeoutMs: 5_000,
       gracefulShutdownMs: 1_000, sigtermEscalationMs: 500,
-      autoStart: [{ name: 'guard', recipe: 'mock-recipe', dataDir, autoRestart,
+      autoStart: [{ name: 'guard', recipe: 'mock-recipe', dataDir, autoRestart, subscription,
         env: { ANTHROPIC_API_KEY: 'sk-test-fleet-guard', ANTHROPIC_BASE_URL: 'http://127.0.0.1:1' } }],
     });
     fleets.push(fleet);
@@ -206,44 +207,122 @@ describe('FleetModule — unresolved launch artifacts', () => {
     }, 15_000);
   }
 
-  for (const retry of ['boot', 'launch', 'restart']) {
+  for (const retry of ['boot', 'launch requested', 'launch omitted', 'launch empty', 'launch send error', 'restart']) {
     test(`transient adoption failure re-probes the same live PID via ${retry}`, async () => {
       let state: any;
       const ctx = { setState: (value: unknown) => { state = value; }, getState: () => state,
         pushEvent: () => {}, getModule: () => null } as unknown as Parameters<FleetModule['start']>[0];
       const dataDir = join(tmpDir, `transient-${retry}`);
-      const owner = await startOwner(dataDir, false, ctx);
+      const saved = ['command-output'];
+      const requested = ['inference:speech'];
+      const configuredDefault = ['inference:speech', 'error'];
+      const expected = retry === 'launch requested' ? requested
+        : retry === 'launch omitted' ? configuredDefault : retry === 'launch empty' ? [] : saved;
+      const owner = await startOwner(dataDir, false, ctx, saved);
       const old = owner.getChildren().get('guard')!;
-      owner.setDetachMode(true); await owner.stop();
-      const socket = lstatSync(old.socketPath, { bigint: true });
-      const pidFile = readFileSync(join(dataDir, 'headless.pid'), 'utf8');
-      const log = readFileSync(join(dataDir, 'startup.log'), 'utf8');
-      let restored = makeFleet();
-      const connectFailure = spyOn(restored as any, 'connectChildSocket').mockRejectedValue(new Error('temporary connection failure'));
-      try { await restored.start(ctx); } finally { connectFailure.mockRestore(); }
-      expect(restored.getChildren().get('guard')?.socket).toBeNull();
-      // Exercise a previously persisted failed-adoption record on another boot too.
-      if (retry === 'boot') {
-        state.children.guard.status = 'crashed';
-        await restored.stop();
-        restored = makeFleet();
-        await restored.start(ctx);
-      } else {
-        expect((await restored.handleToolCall({ id: 'retry', name: retry,
-          input: retry === 'launch' ? { name: 'guard', recipe: 'mock-recipe', dataDir } : { name: 'guard' } })).success).toBe(true);
+      let restored: FleetModule | undefined;
+      let writes: ReturnType<typeof spyOn<Socket, 'write'>> | undefined;
+      owner.setDetachMode(true);
+      try {
+        await owner.stop();
+        const socket = lstatSync(old.socketPath, { bigint: true });
+        const pidFile = readFileSync(join(dataDir, 'headless.pid'));
+        const log = readFileSync(join(dataDir, 'startup.log'));
+        restored = makeFleet(configuredDefault);
+        const connectFailure = spyOn(restored as any, 'connectChildSocket').mockRejectedValueOnce(new Error('temporary connection failure'));
+        try { await restored.start(ctx); } finally { connectFailure.mockRestore(); }
+        expect(restored.getChildren().get('guard')?.socket).toBeNull();
+        expect(restored.getChildren().get('guard')?.subscription).toEqual(saved);
+        expect(state.children.guard.subscription).toEqual(saved);
+        // Capture actual socket writes; the mock child itself ignores subscribe.
+        const write = Socket.prototype.write;
+        writes = spyOn(Socket.prototype, 'write');
+        if (retry === 'launch send error') {
+          const orphan = restored.getChildren().get('guard')!;
+          const persisted = JSON.stringify(state);
+          const failedSockets: Socket[] = [];
+          writes.mockImplementation(function (this: Socket, data: string | Uint8Array,
+            encoding?: BufferEncoding | ((err?: Error | null) => void), cb?: (err?: Error | null) => void) {
+            if (typeof data === 'string' && JSON.parse(data).type === 'subscribe') {
+              failedSockets.push(this);
+              throw new Error('injected subscribe send failure');
+            }
+            return typeof encoding === 'function'
+              ? write.bind(this)(data, encoding) : write.bind(this)(data, encoding, cb);
+          });
+          const result = await restored.handleToolCall({ id: 'retry-send-error', name: 'launch',
+            input: { name: 'guard', recipe: 'mock-recipe', dataDir, subscription: requested } });
+          expect(result.success).toBe(false);
+          expect(result.isError).toBe(true);
+          expect(failedSockets).toHaveLength(1);
+          expect(failedSockets[0].destroyed).toBe(true);
+          expect(restored.getChildren().get('guard')).toBe(orphan);
+          expect(orphan.socket).toBeNull();
+          expect(orphan.process).toBeNull();
+          expect(orphan.pid).toBe(old.pid);
+          expect(orphan.subscription).toEqual(saved);
+          expect(JSON.stringify(state)).toBe(persisted);
+          expect(lstatSync(old.socketPath, { bigint: true }).ino).toBe(socket.ino);
+          expect(lstatSync(old.socketPath, { bigint: true }).ctimeNs).toBe(socket.ctimeNs);
+          expect(readFileSync(join(dataDir, 'headless.pid'))).toEqual(pidFile);
+          expect(readFileSync(join(dataDir, 'startup.log'))).toEqual(log);
+          return;
+        }
+        // Exercise a previously persisted failed-adoption record on another boot too.
+        if (retry === 'boot') {
+          state.children.guard.status = 'crashed';
+          await restored.stop();
+          restored = makeFleet(configuredDefault);
+          await restored.start(ctx);
+        } else {
+          const subscriptionInput = retry === 'launch requested' ? { subscription: requested }
+            : retry === 'launch empty' ? { subscription: [] } : {};
+          expect((await restored.handleToolCall({ id: 'retry', name: retry.startsWith('launch') ? 'launch' : retry,
+            input: retry.startsWith('launch')
+              ? { name: 'guard', recipe: 'mock-recipe', dataDir, ...subscriptionInput }
+              : { name: 'guard' } })).success).toBe(true);
+        }
+        const adopted = restored.getChildren().get('guard')!;
+        expect(adopted.pid).toBe(old.pid);
+        expect(adopted.status).toBe('ready');
+        expect(adopted.process).toBeNull();
+        expect(adopted.recipePath).toBe(old.recipePath);
+        expect(adopted.dataDir).toBe(old.dataDir);
+        expect(adopted.socketPath).toBe(old.socketPath);
+        expect(adopted.env).toEqual(old.env);
+        expect(adopted.subscription).toEqual(expected);
+        expect(state.children.guard.subscription).toEqual(expected);
+        const status = await restored.handleToolCall({ id: 'retry-status', name: 'status', input: { name: 'guard' } });
+        expect((status.data as { subscription: string[] }).subscription).toEqual(expected);
+        const subscribes = writes.mock.calls
+          .flatMap(([data]) => typeof data === 'string' ? data.trim().split('\n') : [])
+          .map(line => JSON.parse(line))
+          .filter(command => command.type === 'subscribe');
+        expect(subscribes).toHaveLength(1);
+        const wire = subscribes[0].events as string[];
+        for (const event of expected) expect(wire).toContain(event);
+        // Fixed wire requirements are independent of the production union helper.
+        const mandatory = ['inference:started', 'inference:tokens', 'inference:tool_calls_yielded',
+          'inference:usage', 'inference:completed', 'inference:failed', 'inference:exhausted',
+          'inference:aborted', 'inference:stream_resumed', 'inference:stream_restarted',
+          'inference:turn_ended', 'tool:started', 'tool:completed', 'tool:failed', 'usage:updated'];
+        for (const event of mandatory) expect(wire).toContain(event);
+        expect(wire).toHaveLength(expected.length + mandatory.length);
+        expect(wire.includes('inference:speech')).toBe(expected.includes('inference:speech'));
+        expect(wire.includes('command-output')).toBe(expected.includes('command-output'));
+        expect(wire.includes('error')).toBe(expected.includes('error'));
+        expect(wire).not.toContain('*');
+        expect(lstatSync(old.socketPath, { bigint: true }).ctimeNs).toBe(socket.ctimeNs);
+        expect(readFileSync(join(dataDir, 'headless.pid'))).toEqual(pidFile);
+        expect(readFileSync(join(dataDir, 'startup.log'))).toEqual(log);
+        const count = adopted.events.length;
+        expect((await restored.handleToolCall({ id: 'retry-help', name: 'command',
+          input: { name: 'guard', command: '/help' } })).success).toBe(true);
+        await waitFor(() => adopted.events.slice(count).some(e => e.type === 'command-output'), 3_000, 'adopted output');
+      } finally {
+        writes?.mockRestore();
+        try { await restored?.stop(); } finally { owner.setDetachMode(false); }
       }
-      const adopted = restored.getChildren().get('guard')!;
-      expect(adopted.pid).toBe(old.pid);
-      expect(adopted.status).toBe('ready');
-      expect(adopted.process).toBeNull();
-      expect(lstatSync(old.socketPath, { bigint: true }).ctimeNs).toBe(socket.ctimeNs);
-      expect(readFileSync(join(dataDir, 'headless.pid'), 'utf8')).toBe(pidFile);
-      expect(readFileSync(join(dataDir, 'startup.log'), 'utf8')).toBe(log);
-      const count = adopted.events.length;
-      expect((await restored.handleToolCall({ id: 'retry-help', name: 'command',
-        input: { name: 'guard', command: '/help' } })).success).toBe(true);
-      await waitFor(() => adopted.events.slice(count).some(e => e.type === 'command-output'), 3_000, 'adopted output');
-      await restored.stop(); owner.setDetachMode(false);
     }, 20_000);
   }
 
@@ -562,7 +641,23 @@ describe('FleetModule — unresolved launch artifacts', () => {
         expect(lstatSync(old.socketPath).ino).toBe(inode);
         expect(restored.getChildren().get('guard')?.socket).toBeNull();
         expect(restored.getChildren().get('guard')?.status).toBe(failure === 'dead persisted PID' ? 'crashed' : 'starting');
-        expect((await launch(restored, dataDir)).success).toBe(false);
+        const blocked = restored.getChildren().get('guard')!;
+        const savedSubscription = [...blocked.subscription];
+        const savedStatus = blocked.status;
+        const socketCtime = lstatSync(old.socketPath, { bigint: true }).ctimeNs;
+        const savedState = JSON.stringify(persisted);
+        expect((await restored.handleToolCall({ id: 'mismatched-retry', name: 'launch',
+          input: { name: 'guard', recipe: 'mock-recipe', dataDir, subscription: ['inference:speech'] } })).success).toBe(false);
+        expect(restored.getChildren().get('guard')).toBe(blocked);
+        expect(blocked.socket).toBeNull();
+        expect(blocked.process).toBeNull();
+        expect(blocked.status).toBe(savedStatus);
+        expect(blocked.pid).toBe(persisted.children.guard.pid);
+        expect(blocked.subscription).toEqual(savedSubscription);
+        expect(JSON.stringify(persisted)).toBe(savedState);
+        expect(lstatSync(old.socketPath, { bigint: true }).ctimeNs).toBe(socketCtime);
+        expect(lstatSync(old.socketPath).ino).toBe(inode);
+        expect(readFileSync(join(dataDir, 'headless.pid'), 'utf8')).toBe(pidFile);
         expect(readFileSync(join(dataDir, 'startup.log'), 'utf8')).toBe(startup);
         expect(server.listening).toBe(true);
       } finally {

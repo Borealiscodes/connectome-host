@@ -524,9 +524,7 @@ export class FleetModule implements Module {
 
     try {
       await this.connectChildSocket(child);
-      try {
-        this.sendToChild(child, { type: 'subscribe', events: p.subscription });
-      } catch { /* the ready-wait below will fail if the subscribe couldn't land */ }
+      this.sendToChild(child, { type: 'subscribe', events: p.subscription });
       await this.waitForReady(child);
 
       if (observedPid !== p.pid) {
@@ -1036,6 +1034,7 @@ export class FleetModule implements Module {
       : resolve(process.cwd(), 'data', input.name);
 
     const socketPath = join(dataDir, 'ipc.sock');
+    const subscription = input.subscription ?? this.config.defaultSubscription;
     if (this.children.get(input.name) !== existing) {
       return { success: false, isError: true, error: `Child '${input.name}' changed during launch; reconcile before retrying.` };
     }
@@ -1043,7 +1042,9 @@ export class FleetModule implements Module {
         existing.recipePath === recipePath) {
       if (this.canRetryAdoption(existing) && !existing.process && !existing.socket && await this.probeLiveness({ ...existing, env: existing.env ?? null })) {
         try {
-          const adopted = await this.reattachToLivingChild({ ...existing, env: existing.env ?? null });
+          const adopted = await this.reattachToLivingChild({
+            ...existing, subscription: [...subscription], env: existing.env ?? null,
+          });
           if (this.children.get(input.name) !== existing) {
             adopted.socket?.destroy();
             return { success: false, isError: true, error: `Child '${input.name}' changed during adoption; retry launch.` };
@@ -1078,7 +1079,6 @@ export class FleetModule implements Module {
     }
 
     mkdirSync(dataDir, { recursive: true });
-    const subscription = input.subscription ?? this.config.defaultSubscription;
 
     const child: FleetChild = {
       name: input.name,
