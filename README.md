@@ -178,9 +178,12 @@ define a server outright (`command` + `args`, or `url` for WebSocket), or name
 an id from **`mcpl-servers.json`** — a registry in the working directory
 (edited with `/mcp add|remove|env`). Registry servers are **opt-in**: one
 loads only when a recipe names its id. For a named id the registry supplies
-the command, args and env, and the recipe may override policy fields
-(`channelSubscription`, `toolPrefix`, enabled/disabled feature sets and tools,
-reconnect, transport). Changes take effect on restart.
+the command, args and env, and the recipe entry may carry only policy fields —
+no `command` or `url` needed: `channelSubscription`, `toolPrefix`, feature-set
+and tool toggles, reconnect settings, WebSocket transport, `access` and
+`toolLifecycle` (`RECIPE_OVERRIDABLE_SERVER_FIELDS` in `src/mcpl-config.ts`).
+An id-only entry the registry doesn't define is a startup error. Changes take
+effect on restart.
 
 Agents with `modules.mcplAdmin` can also deploy, restart and unload their own
 servers; those are kept in `mcpl-servers.agent.json` and load regardless of
@@ -189,6 +192,44 @@ the recipe.
 Per server, `requestTimeoutMs` raises the framework's JSON-RPC timeout (60 s
 by default) for slow tools, and `agent.retry` passes a Membrane retry policy
 through for flaky gateways.
+
+### Tool lifecycle and tool classes (MCPL RFC-007 / RFC-008)
+
+An MCPL server can follow the agent's calls to *other* tools: a desktop avatar picking up a prop while a shell command runs, or pointing where the agent clicks. It receives `tools/lifecycle` notifications (`started`, then `completed` / `failed` / `aborted`) and never tool results. Both permissions are **off by default**. A `toolLifecycle` block on the server's entry, in the recipe or in `mcpl-servers.json`, is the grant:
+
+```json
+"mcpServers": {
+  "avatar": {
+    "command": "node",
+    "args": ["avatar-mcpl.mjs"],
+    "toolLifecycle": {
+      "observe": {},
+      "inputs": { "classes": "default" }
+    }
+  }
+}
+```
+
+- `observe` sends metadata (tool, class, provider, phase, duration). `{}` means every call. Narrow it with `tools` (name patterns, `*` = any run), `classes`, or `conversations` (agent names).
+- `inputs` sends argument fields, but only the fields the server asks for with `tools/observe`. It needs a `tools` or `classes` term to deliver anything (`"default"` = computer, shell, files, web, media, body). It never carries `comms` or unclassed tools' arguments. `maxInputBytes` bounds the payload (default 16 KiB).
+
+A tool's class comes from, in order:
+1. the recipe's `toolClassOverrides`;
+2. this host's table of its own module tools (`HOST_TOOL_CLASSES` in `src/tool-lifecycle-config.ts`) or the framework's built-ins;
+3. the server's own `_meta["mcpl/class"]`.
+
+Third-party MCP servers never declare a class, so class them in the recipe:
+
+```json
+"toolClassOverrides": {
+  "cua--*": ["computer"],
+  "blender--*": ["media"]
+}
+```
+
+An unclassed tool is treated as the most restrictive class: observable that it ran, never what it was given.
+
+Servers an agent deploys for itself (`mcpl-servers.agent.json`) can never hold either permission. The overlay denies `toolLifecycle` and strips any `toolLifecycle` block, as it already does for context hooks and server-initiated inference. To let such a server observe, the operator moves it into the recipe. These settings take effect with an agent-framework that includes tool lifecycle (anima-research/agent-framework#199); older ones ignore them.
 
 ### Included recipes
 

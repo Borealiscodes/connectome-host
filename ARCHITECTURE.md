@@ -224,13 +224,22 @@ Framework features configured by top-level recipe keys rather than modules:
 
 - **Opt-in per recipe.** `mcpl-servers.json` (CWD) is a registry: a server in
   it loads only when the recipe names its id under `mcpServers`. The file
-  supplies the command, args and env; the recipe may override policy
-  (`channelSubscription`, `toolPrefix`, feature sets, enabled/disabled tools,
-  reconnect, transport). A recipe may also define servers the file doesn't
-  have. `/mcp add|remove|env` edits the file; changes apply on restart.
+  supplies the command, args and env; the recipe entry may be id-only or
+  override policy (`channelSubscription`, `toolPrefix`, feature sets,
+  enabled/disabled tools, reconnect, transport, `access`, `toolLifecycle`).
+  An id-only entry the file doesn't define is a startup error. A recipe may
+  also define servers the file doesn't have. `/mcp add|remove|env` edits the
+  file; changes apply on restart.
+- **Tool lifecycle.** A `toolLifecycle` grant lets a server observe the
+  agent's calls to other tools (MCPL RFC-007), classed per RFC-008 by the
+  recipe's `toolClassOverrides`, the host's `HOST_TOOL_CLASSES`
+  (`src/tool-lifecycle-config.ts`) and the server's own `_meta`. Off by
+  default; needs an agent-framework with tool lifecycle
+  (anima-research/agent-framework#199). See the README.
 - **Agent overlay.** `mcpl-servers.agent.json` holds servers the agent deployed
   for itself (`mcplAdmin`); they load unconditionally, and tombstones in it
-  suppress servers the agent unloaded.
+  suppress servers the agent unloaded. The overlay can never grant
+  `toolLifecycle`.
 - **Child env.** Stdio servers inherit the host env plus the entry's env and
   a few house defaults. Each server's stderr goes to
   `sessions/<id>/mcpl-stderr/<server>.log` (rotated at 10 MB).
