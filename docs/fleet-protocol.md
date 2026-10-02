@@ -41,9 +41,9 @@ the recipe.
 
 | File | Purpose |
 |---|---|
-| `ipc.sock` | The Unix socket. A leftover socket is unlinked unconditionally at startup (no liveness check), so run one instance per data dir. |
+| `ipc.sock` | The Unix socket. A leftover socket is unlinked unconditionally at startup (no liveness check), so run one instance per data dir. A fleet parent won't launch into a dataDir that still has one (§4.3). |
 | `headless.log` | Append-only. `process.stdout.write` and `process.stderr.write` are redirected here before anything else runs, so **nothing structured goes to stdout** — the socket is the only protocol channel. |
-| `headless.pid` | The child's PID; removed on graceful shutdown. The fleet parent does not rely on it for adoption (it uses the PID persisted in its own state). |
+| `headless.pid` | The child's PID; removed on graceful shutdown. Adoption uses the PID persisted in the parent's own state; the parent reads this file only to confirm a leftover belongs to the dead child it tracks before removing it (§4.3). |
 | `startup.log` | Written by the *parent's* FleetModule: the spawned child's stdio points here, so crashes before the redirect (bad recipe, missing key, import error) are captured. |
 
 **Connection model.** One client at a time; a new connection closes the
@@ -230,6 +230,19 @@ spawned detached with env `{...process.env, ...env, AGENT_TIMEZONE, DATA_DIR}`.
 The parent waits for the socket file, connects, sends `subscribe`, and waits
 for `lifecycle:ready`.
 
+**Leftover artifacts.** A launch never spawns into a dataDir that still holds
+`ipc.sock` or `headless.pid`. If the parent tracks a child of that name with
+the same dataDir and recipe, it first retries adoption (§4.5) when the record
+allows it and the PID and socket look alive. Failing that, it removes the two
+files only if the tracked PID is confirmed gone, `headless.pid` holds exactly
+that PID, and the socket is absent or refuses connections. The refusal check
+runs under `node`; a missing `node`, a timeout or any other answer leaves the
+files in place. If either file remains, the launch fails with an error naming
+both paths and the way out: `fleet--status`, then `fleet--launch` or
+`fleet--restart` to retry, or `fleet--kill` for an attached live child. A
+parent with no record of the child never removes them; an operator has to.
+These checks narrow races but are not a cross-process lock.
+
 **No subfleets.** Every launch path first loads the child recipe in the parent;
 if it declares `modules.fleet` (`true` or an object), the launch is refused
 before any process starts. If the recipe can't be loaded at all, the check is
@@ -257,11 +270,19 @@ output) and `ops:alert`. A narrowed recipe must list the ones it wants.
   record (recipe path, dataDir, socket, pid, status, timestamps, exit info,
   subscription, autoRestart, env) to its module state in the current session's
   Chronicle store.
-- **Adopt on start.** For each persisted child that was `ready` or `starting`:
-  probe the pid and socket, connect, re-subscribe, wait for `ready`, and
-  require `ready.pid` to equal the persisted pid (guards against PID reuse).
-  Failures are marked `crashed`; autoStart children that weren't adopted are
-  spawned fresh.
+- **Adopt on start.** For each persisted child whose record allows it (`ready`
+  or `starting` with no exit time, or `crashed` by an earlier failed
+  adoption): check the pid is alive and the socket path is a socket, connect,
+  re-subscribe, wait for `ready`, and require `ready.pid` to equal the
+  persisted pid (guards against PID reuse). A failure kills nothing and
+  removes nothing. If the probe fails, the record becomes `crashed` when the
+  PID is confirmed gone and stays `starting` otherwise, with `exitReason`
+  `adoption unresolved; …`. If the handshake fails, it stays `starting` with
+  `adopt failed: …`. `fleet--launch` or `fleet--restart` on that name
+  retries. Records that ended for any other reason are kept for
+  `status`/`list` but never adopted, even if their old PID is alive again.
+  autoStart children that weren't adopted go through a normal launch, which
+  may adopt, clean up or refuse (§4.3); a refusal is logged.
 - **Normal exit** stops every child (`fleet--kill`), with a `process.on('exit')`
   SIGKILL as backstop. Only a hard crash of the parent orphans children.
 - **Detach** (the `d` answer at the quit prompt) leaves children running; the
