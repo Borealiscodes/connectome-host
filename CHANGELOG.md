@@ -6,6 +6,10 @@ release time — see [CONTRIBUTING.md](CONTRIBUTING.md#changelog).
 
 ## Unreleased
 
+### Fixed
+
+- MCPL server definitions in `mcpl-servers.json` now preserve `inheritEnv`, and recipes can override it (including explicit `false`) for file-defined servers. Recipes and server files reject non-boolean values. Agent-owned overlays strip `inheritEnv` entirely, including when replacing an operator-defined server; full host-environment access is an operator grant. Full environment inheritance requires an agent-framework version containing its PR #175; the host's locked 0.19.0 predates that control and remains unchanged.
+
 ## 0.9.0 — 2026-09-21
 
 ### Added
