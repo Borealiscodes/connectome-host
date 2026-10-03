@@ -194,6 +194,9 @@ export interface RecipeKvUnifiedConfig {
   labelCeiling: number;
   adoptEpsilon: number;
   treeifyNonContiguousSummaries: boolean;
+  /** Preserve summaries spanning gaps instead of treeifying them. Mutually exclusive
+   * with treeifyNonContiguousSummaries; both flags must be explicit. */
+  preserveGapBearingSummaries: boolean;
 }
 
 export interface RecipeAgent {
@@ -1426,9 +1429,15 @@ function validateKvUnifiedConfig(strategy: Record<string, unknown>): void {
   ) {
     throw new Error('Recipe agent.strategy.kvUnified.adoptEpsilon must be a finite non-negative number.');
   }
-  if (typeof config.treeifyNonContiguousSummaries !== 'boolean') {
+  // Mirror context-manager 0.11.0: src/adaptive/strategies/kv-unified.ts validateExplicitOptions.
+  for (const key of ['treeifyNonContiguousSummaries', 'preserveGapBearingSummaries'] as const) {
+    if (typeof config[key] !== 'boolean') {
+      throw new Error(`Recipe agent.strategy.kvUnified.${key} must be an explicit boolean.`);
+    }
+  }
+  if (config.treeifyNonContiguousSummaries && config.preserveGapBearingSummaries) {
     throw new Error(
-      'Recipe agent.strategy.kvUnified.treeifyNonContiguousSummaries must be an explicit boolean.',
+      'Recipe agent.strategy.kvUnified.treeifyNonContiguousSummaries and preserveGapBearingSummaries are mutually exclusive.',
     );
   }
 }
