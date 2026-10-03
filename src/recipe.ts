@@ -14,6 +14,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, chmodSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { buildWorkspaceMounts } from './workspace-mounts.js';
+import { validateToolClassTable, validateToolLifecycle } from './tool-lifecycle-config.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -159,6 +160,13 @@ export interface RecipeStrategy {
    *  names the agent and directs attribution so pure-witness chunks don't
    *  flip the summarizer into another speaker's identity. */
   identityReminder?: string;
+  /** Reminder for WHOLLY inherited targets (L1 chunks entirely before
+   *  witnessedBeforeSequence; merges of all-witnessed sources). Lived and
+   *  mixed targets keep identityReminder (context-manager
+   *  witnessedIdentityReminder). */
+  witnessedIdentityReminder?: string;
+  /** Follow the reminder with an instruction to apply it silently. */
+  identityReminderSilent?: boolean;
 }
 
 export interface RecipeKvUnifiedConfig {
@@ -417,6 +425,34 @@ export interface RecipeMcpServer {
    * Like `source`, this is build-tooling metadata.  Ignored at runtime.
    */
   credentialFiles?: RecipeCredentialFile[];
+  /**
+   * MCPL tool lifecycle (RFC-007) policy for this server: whether it may
+   * observe the agent's OTHER tool calls (`observe`) and their requested
+   * argument fields (`inputs`), each with an optional narrowing. Both are
+   * denied by default; stating a block is the operator's grant. `inputs`
+   * needs a `tools` or `classes` term to deliver anything, and never carries
+   * `comms` or unclassed arguments. See src/tool-lifecycle-config.ts.
+   */
+  toolLifecycle?: RecipeToolLifecycle;
+}
+
+/** A narrowing for one tool-lifecycle path (RFC-007 §4.3). Every stated key
+ *  must hold; patterns use the RFC-007 §6.2 grammar (`*` = any run). */
+export interface RecipeToolLifecycleNarrowing {
+  /** Patterns over the model-facing tool name (`computer--*`). */
+  tools?: string[];
+  /** RFC-008 classes the tool must have one of; `"default"` = computer,
+   *  shell, files, web, media, body. */
+  classes?: string[] | 'default';
+  /** Patterns over the conversation id (the agent name in this host). */
+  conversations?: string[];
+}
+
+export interface RecipeToolLifecycle {
+  observe?: RecipeToolLifecycleNarrowing;
+  inputs?: RecipeToolLifecycleNarrowing;
+  /** Serialized-size bound for argument payloads. Framework default 16 KiB. */
+  maxInputBytes?: number;
 }
 
 /**
@@ -1017,6 +1053,14 @@ export interface Recipe {
   conversations?: RecipeConversations;
   /** Tune-out's subconscious resident (agent-framework#77). */
   subconscious?: RecipeSubconscious;
+  /**
+   * MCPL RFC-008 operator class overrides: tool-name pattern → classes. The
+   * highest-precedence source of a tool's class, and the way to class
+   * third-party MCP servers (blender, computer use, …) that will never
+   * declare `_meta["mcpl/class"]`. Replaces, never merges with, what the
+   * server declared. First matching pattern wins.
+   */
+  toolClassOverrides?: Record<string, string[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1798,10 +1842,15 @@ export function validateRecipe(raw: unknown): Recipe {
         throw new Error(`mcpServers.${id} must be an object`);
       }
       const server = entry as Record<string, unknown>;
-      const hasCommand = typeof server.command === 'string' && server.command;
-      const hasUrl = typeof server.url === 'string' && server.url;
-      if (!hasCommand && !hasUrl) {
-        throw new Error(`mcpServers.${id} must have a "command" string (stdio) or "url" string (websocket)`);
+      // An entry with neither command nor url names a server defined in
+      // mcpl-servers.json and sets only policy fields on it; it is resolved
+      // (or rejected, if the file has no such id) at startup by
+      // mergeRecipeServers. When present, each must be a non-empty string.
+      if (server.command !== undefined && !(typeof server.command === 'string' && server.command)) {
+        throw new Error(`mcpServers.${id}.command must be a non-empty string`);
+      }
+      if (server.url !== undefined && !(typeof server.url === 'string' && server.url)) {
+        throw new Error(`mcpServers.${id}.url must be a non-empty string`);
       }
       if (server.args !== undefined && !Array.isArray(server.args)) {
         throw new Error(`mcpServers.${id}.args must be an array`);
@@ -1877,6 +1926,9 @@ export function validateRecipe(raw: unknown): Recipe {
         if (!Array.isArray(server[field]) || !(server[field] as unknown[]).every((p) => typeof p === 'string' && p)) {
           throw new Error(`mcpServers.${id}.${field} must be an array of non-empty strings`);
         }
+      }
+      if (server.toolLifecycle !== undefined) {
+        validateToolLifecycle(server.toolLifecycle, `mcpServers.${id}.toolLifecycle`);
       }
       if (server.credentialFiles !== undefined) {
         if (!Array.isArray(server.credentialFiles)) {
@@ -2238,6 +2290,10 @@ export function validateRecipe(raw: unknown): Recipe {
         throw new Error(`Recipe codeExecution.${k} must be a non-negative number.`);
       }
     }
+  }
+
+  if (obj.toolClassOverrides !== undefined) {
+    validateToolClassTable(obj.toolClassOverrides, 'Recipe toolClassOverrides');
   }
 
   if (obj.subconscious !== undefined) {

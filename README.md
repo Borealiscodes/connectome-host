@@ -124,7 +124,45 @@ If `systemPrompt` is an HTTP(S) URL (no spaces or newlines), it's fetched as pla
 
 ### MCP server merging
 
-Recipe servers merge with `mcpl-servers.json`. The file wins on conflict, so users can `/mcp add` extra servers or override recipe defaults.
+A recipe loads a server from `mcpl-servers.json` by naming its id under `mcpServers`. The file supplies the spawn command and credentials. The recipe may override policy fields: `toolPrefix`, feature-set and tool toggles, reconnect settings, WebSocket transport, `access` and `toolLifecycle` (`RECIPE_OVERRIDABLE_SERVER_FIELDS` in `src/mcpl-config.ts`). The recipe entry for a file server may carry only policy fields; it needs no `command` or `url`. An id-only entry that the file doesn't define is a startup error. A recipe can also define a server the file doesn't have, by giving its own `command` or `url`.
+
+### Tool lifecycle and tool classes (MCPL RFC-007 / RFC-008)
+
+An MCPL server can follow the agent's calls to *other* tools: a desktop avatar picking up a prop while a shell command runs, or pointing where the agent clicks. It receives `tools/lifecycle` notifications (`started`, then `completed` / `failed` / `aborted`) and never tool results. Both permissions are **off by default**. A `toolLifecycle` block on the server's entry, in the recipe or in `mcpl-servers.json`, is the grant:
+
+```json
+"mcpServers": {
+  "avatar": {
+    "command": "node",
+    "args": ["avatar-mcpl.mjs"],
+    "toolLifecycle": {
+      "observe": {},
+      "inputs": { "classes": "default" }
+    }
+  }
+}
+```
+
+- `observe` sends metadata (tool, class, provider, phase, duration). `{}` means every call. Narrow it with `tools` (name patterns, `*` = any run), `classes`, or `conversations` (agent names).
+- `inputs` sends argument fields, but only the fields the server asks for with `tools/observe`. It needs a `tools` or `classes` term to deliver anything (`"default"` = computer, shell, files, web, media, body). It never carries `comms` or unclassed tools' arguments. `maxInputBytes` bounds the payload (default 16 KiB).
+
+A tool's class comes from, in order:
+1. the recipe's `toolClassOverrides`;
+2. this host's table of its own module tools (`HOST_TOOL_CLASSES` in `src/tool-lifecycle-config.ts`) or the framework's built-ins;
+3. the server's own `_meta["mcpl/class"]`.
+
+Third-party MCP servers never declare a class, so class them in the recipe:
+
+```json
+"toolClassOverrides": {
+  "cua--*": ["computer"],
+  "blender--*": ["media"]
+}
+```
+
+An unclassed tool is treated as the most restrictive class: observable that it ran, never what it was given.
+
+Servers an agent deploys for itself (`mcpl-servers.agent.json`) can never hold either permission. The overlay denies `toolLifecycle` and strips any `toolLifecycle` block, as it already does for context hooks and server-initiated inference. To let such a server observe, the operator moves it into the recipe. These settings take effect with an agent-framework that includes tool lifecycle (anima-research/agent-framework#199); older ones ignore them.
 
 ### Included recipes
 
@@ -134,6 +172,28 @@ Recipe servers merge with `mcpl-servers.json`. The file wins on conflict, so use
 | [`recipes/knowledge-miner.json`](recipes/knowledge-miner.json) | Multi-source extraction from Zulip + Notion + GitLab |
 
 See [`recipes/SETUP.md`](recipes/SETUP.md) for a detailed setup guide for the knowledge-miner recipe.
+
+### Claude subscription provider
+
+The default `anthropic` provider also runs on a Claude subscription (Pro/Max)
+instead of an API key. Install Claude Code, generate a long-lived OAuth token
+with `claude setup-token`, and export it as `ANTHROPIC_AUTH_TOKEN`:
+
+```bash
+export ANTHROPIC_AUTH_TOKEN=sk-ant-oat...
+```
+
+No recipe change is needed — any `anthropic` recipe works. When
+`ANTHROPIC_AUTH_TOKEN` is set it takes precedence over `ANTHROPIC_API_KEY`
+(requests never carry both). Connectome then sends the `oauth-2025-04-20`
+beta header (merged with any `agent.anthropicBetas`) and prepends the Claude
+Code identity block the subscription endpoint requires ahead of the recipe's
+system prompt. Usage draws down the subscription's 5-hour and weekly windows
+rather than per-token billing; the TUI status line and WebUI show them. When
+the quota meter already has a reading that shows a spent window, a 429 parks
+the agent until the window resets instead of retrying; without a reading
+(e.g. the first 429 in a headless run with no viewer, or an unreadable usage
+endpoint) it follows the normal retry path.
 
 ### ChatGPT subscription provider
 
@@ -207,7 +267,7 @@ option.
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) 20+ and [Bun](https://bun.sh/) runtime
-- An Anthropic API key, OpenAI API key, or the Codex CLI signed in with ChatGPT
+- An Anthropic API key, a Claude subscription OAuth token (`claude setup-token`), an OpenAI API key, or the Codex CLI signed in with ChatGPT
 
 ### Install
 
@@ -219,7 +279,8 @@ npm install
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | (required) | Anthropic API key |
+| `ANTHROPIC_API_KEY` | (required unless `ANTHROPIC_AUTH_TOKEN` is set) | Anthropic API key |
+| `ANTHROPIC_AUTH_TOKEN` | — | Claude subscription OAuth token (`claude setup-token`); takes precedence over `ANTHROPIC_API_KEY` |
 | `OPENAI_API_KEY` | — | OpenAI Platform key for `openai-responses` recipes |
 | `OPENAI_COMPATIBLE_API_KEY` | — | Key for `openai-compatible` recipes (no `OPENAI_API_KEY` fallback by design); omit for local servers |
 | `CODEX_BINARY` | `codex` | Codex CLI executable for `openai-codex` subscription auth |
