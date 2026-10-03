@@ -37,7 +37,7 @@ describe('recipe modules.history semantic validation', () => {
     process.env.EMBED_TOKEN_TEST = 'sekrit';
     const dir = mkdtempSync(join(tmpdir(), 'recipe-sem-'));
     const path = join(dir, 'r.json');
-    writeFileSync(path, JSON.stringify(recipeWith({ semantic: { url: 'http://x:1', token: '${EMBED_TOKEN_TEST}' } })));
+    writeFileSync(path, JSON.stringify(recipeWith({ semantic: { url: 'http://localhost:1', token: '${EMBED_TOKEN_TEST}' } })));
     const r = await loadRecipe(path);
     expect((r.modules?.history as { semantic: { token: string } }).semantic.token).toBe('sekrit');
   });
@@ -49,6 +49,56 @@ describe('recipe modules.history semantic validation', () => {
       { semantic: { url: 'http://x', includePrivateTools: 'no' } },
     ]) {
       expect(() => validateRecipe(recipeWith(bad))).toThrow();
+    }
+  });
+});
+
+// PR #144 review round (Anarchid #4–#6, Greptile 2–4).
+describe('recipe modules.history semantic — review findings', () => {
+  const ok = 'https://embed.example.com';
+  const rejects = (history: unknown, msg: RegExp) =>
+    expect(() => validateRecipe(recipeWith(history))).toThrow(msg);
+
+  test('unknown keys under modules.history are rejected (typo of `semantic`)', () => {
+    rejects({ sematic: { url: ok } }, /modules\.history.*unknown key.*sematic/);
+    rejects({ semantics: { url: ok } }, /modules\.history.*unknown key.*semantics/);
+  });
+
+  test('unknown keys under semantic are rejected (miscased or AF-internal knobs)', () => {
+    rejects({ semantic: { url: ok, syncIntervalMS: 1 } }, /semantic.*unknown key.*syncIntervalMS/);
+    for (const k of ['syncBatch', 'overlapMs', 'requestTimeoutMs', 'maxChars']) {
+      rejects({ semantic: { url: ok, [k]: 1 } }, new RegExp(`unknown key.*${k}`));
+    }
+  });
+
+  test('url must parse and carry a host; no credentials, query or fragment', () => {
+    for (const url of ['http://', 'https://', 'http:///v1', 'not a url', 'https://user:pw@embed.example.com',
+      'https://embed.example.com/?x=1', 'https://embed.example.com/#f', 'ws://embed.example.com']) {
+      rejects({ semantic: { url } }, /modules\.history\.semantic\.url/);
+    }
+    for (const url of [ok, 'https://embed.example.com:8804/base/', 'http://127.0.0.1:8804', 'http://localhost:8804',
+      'http://[::1]:8804', 'http://100.90.161.34:8804', 'http://embed.tail1234.ts.net:8804']) {
+      expect(() => validateRecipe(recipeWith({ semantic: { url } }))).not.toThrow();
+    }
+  });
+
+  test('plaintext http off loopback/tailnet needs allowInsecureHttp: true', () => {
+    for (const url of ['http://embed.example.com', 'http://10.0.0.5:8804', 'http://192.168.1.2:8804', 'http://100.128.0.1:8804']) {
+      rejects({ semantic: { url } }, /plaintext http.*allowInsecureHttp/);
+      expect(() => validateRecipe(recipeWith({ semantic: { url, allowInsecureHttp: true } }))).not.toThrow();
+    }
+    rejects({ semantic: { url: ok, allowInsecureHttp: 'yes' } }, /allowInsecureHttp must be a boolean/);
+  });
+
+  test('budgets are integers >= 1; syncIntervalMs is 0 or an integer >= 5000', () => {
+    for (const k of ['maxSyncPerTick', 'maxSyncBeforeSearch']) {
+      rejects({ semantic: { url: ok, [k]: 0 } }, new RegExp(k));
+      rejects({ semantic: { url: ok, [k]: 1.5 } }, new RegExp(k));
+      expect(() => validateRecipe(recipeWith({ semantic: { url: ok, [k]: 1 } }))).not.toThrow();
+    }
+    for (const v of [1, 4999, 6000.5]) rejects({ semantic: { url: ok, syncIntervalMs: v } }, /syncIntervalMs/);
+    for (const v of [0, 5000, 60000]) {
+      expect(() => validateRecipe(recipeWith({ semantic: { url: ok, syncIntervalMs: v } }))).not.toThrow();
     }
   });
 });
