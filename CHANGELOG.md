@@ -6,6 +6,9 @@ release time — see [CONTRIBUTING.md](CONTRIBUTING.md#changelog).
 
 ## Unreleased
 
+### Fixed
+
+- The generic provider logging wrapper forwards an adapter's optional `toolResultImageMediaTypes` capability, preserving its native tool-image policy. Older adapters keep their existing behavior; Gemini HEIC/HEIF history preservation requires a membrane version containing antra-tess/membrane#92.
 ### Added
 
 - Recipes can tune `agent.strategy.maxLiveImages`, `imageStripDepthTokens`, and `maxLiveImageBytes` for autobiographical and frontdesk strategies. Values must be non-negative safe integers; zero disables the corresponding limit. Omitted values keep context-manager's defaults.
