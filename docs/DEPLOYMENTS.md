@@ -65,7 +65,10 @@ module. Keep it on **loopback** and reach it via SSH tunnel. See
   `DISCORD_GUILD_ID`, `DISCORD_MCPL_DEBUG_LOG`, `DISCORD_SUBSCRIPTIONS_FILE`,
   `SESSION_SERVER_TOKEN`, `HEARTBEAT_CONFIG_FILE`; the WebUI credentials the
   recipe's `${VAR}`s name (e.g. `WEBUI_USER` / `WEBUI_PASS`); optionally
-  `CONNECTOME_OPS_WEBHOOK` (ops alerts, below).
+  `CONNECTOME_OPS_WEBHOOK` (ops alerts, below). The host reads `.env`, but a
+  stdio MCPL server sees only the variables its recipe entry maps in `env`
+  (plus a small system allowlist): an unmapped `DISCORD_GUILD_ID` is unset for
+  discord-mcpl, which then serves every channel the bot is invited to.
 - `data/` — chronicle store + per-session `config/gate.json` (wake policies;
   append-only reconcile, so reorder the **live** file, not just the recipe).
 
@@ -161,7 +164,7 @@ ambient channel chatter enters context without waking.
    now: context-manager's compile keeps at most 6 live images
    (`maxLiveImages`), strips images deeper than 30 000 tokens
    (`imageStripDepthTokens`) and keeps cumulative inline image base64 under
-   20 MB (`maxLiveImageBytes`), replacing the rest with placeholders; membrane
+   20 MiB (`maxLiveImageBytes`), replacing the rest with placeholders; membrane
    degrades API-rejected media types (SVG, TIFF, …) to a visible placeholder
    and fails loudly, before the API call, when a request exceeds its byte cap
    (28 MB, `MEMBRANE_MAX_REQUEST_BYTES`); agent-framework's `read_image`
@@ -169,10 +172,9 @@ ambient channel chatter enters context without waking.
    size-checks an individual image on ingest (membrane's `images.autoResize` /
    `maxSizeBytes` config is declared but unused), so one image over the
    provider's per-image limit still 400s the request while it stays live —
-   the poison-history breaker only sheds newest exchanges. The host also does
-   not pass the three image keys through from `agent.strategy` (they are not
-   in `PASSTHROUGH_KEYS`, `src/framework-strategy.ts`), so recipes get
-   context-manager's defaults. (Stopgap: a per-install
+   the poison-history breaker only sheds newest exchanges. Recipes can tune
+   the three image keys under `agent.strategy` (autobiographical and
+   frontdesk; zero disables each limit independently). (Stopgap: a per-install
    `strip-oversized-images.mjs`, below.)
 
 ## Helper scripts (per install dir)

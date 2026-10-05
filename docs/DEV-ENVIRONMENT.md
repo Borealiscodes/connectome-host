@@ -32,17 +32,17 @@ All cloned as siblings under `~/connectome-local/`:
 | Dir | GitHub repo | Branch | Ver | Role |
 |---|---|---|---|---|
 | `forking-knowledge-miner` | `anima-research/connectome-host` | `main` | 0.9.0 | the host app (run via **bun**) |
-| `agent-framework` | `anima-research/agent-framework` | `main` | 0.19.0 | host runtime: gate, MCPL orchestration, locus routing, `think` |
+| `agent-framework` | `anima-research/agent-framework` | `main` | 0.21.0 | host runtime: gate, MCPL orchestration, locus routing, `think` |
 | `discord-mcpl` | `anima-research/discord-mcpl` | `main` | 0.1.4 † | Discord surface (MCPL server) |
 | `heartbeat-mcpl` | `anima-research/heartbeat-mcpl` | `main` | 0.1.3 † | periodic self-wake (MCPL server) |
 | `terminal-sessions-mcp` | `antra-tess/terminal-sessions-mcp` ⚠️ | `main` | 1.6.0 † | shell: session daemon (ws://localhost:3100) + per-agent MCP stdio frontend |
 | `membrane` | `antra-tess/membrane` ⚠️ | `main` | 0.5.86 | LLM client lib — **single shared instance required** |
-| `context-manager` | `anima-research/context-manager` | `main` | 0.11.0 | context compilation / autobiographical memory |
+| `context-manager` | `anima-research/context-manager` | `main` | 0.13.0 | context compilation / autobiographical memory |
 | `chronicle` | `anima-research/chronicle` | `main` | 0.4.0 | record / chronicle store (Rust, napi-rs bindings) |
 | `mcpl-core-ts` | `anima-research/mcpl-core-ts` | `main` | 0.2.1 † | MCPL protocol types |
 
 > Versions drift. The host and `@animalabs/*` library versions are what
-> connectome-host 0.9.0 installs; † marks versions last recorded 2026-07-22 —
+> connectome-host `main` (package version 0.9.0) installs; † marks versions last recorded 2026-07-22 —
 > check that repo's `package.json`. The published npm
 > releases now track `main` closely (typically within a patch), so the
 > stock `bun install` path is sufficient for host-level work — use the
@@ -198,6 +198,11 @@ DISCORD_SUBSCRIPTIONS_FILE=<abs>/data/discord-subscriptions.json
 SESSION_SERVER_TOKEN=<same token the shell daemon was started with>
 HEARTBEAT_CONFIG_FILE=<abs>/data/heartbeat-config.json
 ```
+
+The host reads `.env`, but stdio MCPL servers see only what their recipe entry
+maps in `env` (plus a small system allowlist), e.g.
+`"DISCORD_GUILD_ID": "${DISCORD_GUILD_ID}"`. A variable left only in `.env` is
+unset for the server.
 
 **Run the host (headless), supervised:**
 ```bash

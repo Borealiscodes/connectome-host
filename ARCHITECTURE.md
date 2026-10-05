@@ -119,8 +119,9 @@ A recipe is JSON; the full key set is typed and validated in
 - **Validation checks values, not spelling.** Bad values, impossible
   combinations (e.g. an instructions path on a mount that can't be written)
   and partial policies are rejected at load, naming the key. Unrecognized keys
-  are generally not rejected (a few blocks, such as `subconscious`, refuse
-  unknown fields), so a misspelled key is silently ignored.
+  are generally not rejected (a few blocks, such as `subconscious` and the
+  object form of `modules.history`, refuse unknown fields), so a misspelled
+  key is silently ignored.
 - **Paths.** Fleet child recipes resolve relative to the parent recipe file;
   runtime paths (data dirs, workspace mounts) resolve against the CWD.
 - **Extensions.** `extensions` maps names to local modules that register
@@ -174,8 +175,12 @@ conditions are required so the headers can never reach a vendor endpoint.
   (`compressionModel` defaults to `agent.model`) in the agent's own voice
   (`summaryParticipant` defaults to `agent.name`). Host defaults:
   `headWindowTokens` 4000, `recentWindowTokens` 30000, `maxMessageTokens`
-  10000. About 45 further context-manager keys pass through verbatim.
-  `foldingStrategy: "kv-unified"` is an opt-in cost-aware solver.
+  10000. About 48 further context-manager keys pass through verbatim,
+  among them the live-image limits `maxLiveImages`, `imageStripDepthTokens`
+  and `maxLiveImageBytes` (context-manager defaults 6, 30000 and 20 MiB; zero
+  disables each). `foldingStrategy: "kv-unified"` is an opt-in cost-aware
+  solver; its `kvUnified` block must set `treeifyNonContiguousSummaries` and
+  `preserveGapBearingSummaries` explicitly, and not both `true`.
 - **`frontdesk`** (`src/strategies/frontdesk-strategy.ts`) — the same, plus
   channel provenance headers, topic-aware chunk boundaries and preservation of
   unanswered questions and @mentions. For agents that staff a channel.
@@ -204,7 +209,7 @@ Built in `createFramework()`. Tools are exposed as `<module>--<tool>`.
 | `WorkspaceModule` (framework) | `workspace` | **on** | Mounted filesystem backed by Chronicle (`workspace--read/write/edit/ls/glob/grep/…`). Defaults: `input` (read-only `./input`), `products` (read-write `./output`). |
 | `SubscriptionGcModule` | `subscriptionGc` | **on** | Auto-closes channels whose ambient traffic since the agent last ran exceeds a limit (20k chars). |
 | `ChannelModeModule` | `channelMode` | **on** with the gate | `channel-mode--set_channel_mode`: mentions-only ↔ debounced ambient. |
-| `HistoryModule` (framework) | `history` | off | `history--stats/extract/search/overview` over the agent's own uncompressed record. |
+| `HistoryModule` (framework) | `history` | off | `history--stats/extract/search/overview` over the agent's own uncompressed record. `history: { semantic: { url, … } }` adds `history--semantic_search` over a remote embed index, namespaced `<prefix>/<session id>` (`src/history-semantic.ts`). |
 | `InstructionsModule` | `instructions` | off | A shared living instructions file injected into every agent every turn. |
 | `SubagentModule` | `subagents` | off | `subagent--spawn/fork/peek/hud/concurrency/return`: in-process ephemeral agents (depth ≤3, adaptive concurrency). |
 | `LessonsModule` | `lessons` | off | `lessons--create/update/query/list/boost/demote/deprecate`: a confidence-scored store. Storage only. |
@@ -226,7 +231,8 @@ Framework features configured by top-level recipe keys rather than modules:
   it loads only when the recipe names its id under `mcpServers`. The file
   supplies the command, args and env; the recipe entry may be id-only or
   override policy (`channelSubscription`, `toolPrefix`, feature sets,
-  enabled/disabled tools, reconnect, transport, `access`, `toolLifecycle`).
+  enabled/disabled tools, reconnect, transport, `access`, `toolLifecycle`,
+  `inheritEnv`).
   An id-only entry the file doesn't define is a startup error. A recipe may
   also define servers the file doesn't have. `/mcp add|remove|env` edits the
   file; changes apply on restart.
@@ -234,15 +240,20 @@ Framework features configured by top-level recipe keys rather than modules:
   agent's calls to other tools (MCPL RFC-007), classed per RFC-008 by the
   recipe's `toolClassOverrides`, the host's `HOST_TOOL_CLASSES`
   (`src/tool-lifecycle-config.ts`) and the server's own `_meta`. Off by
-  default; needs an agent-framework with tool lifecycle
-  (anima-research/agent-framework#199). See the README.
+  default; needs agent-framework ≥ 0.20 (anima-research/agent-framework#199),
+  which this host requires. See the README.
 - **Agent overlay.** `mcpl-servers.agent.json` holds servers the agent deployed
   for itself (`mcplAdmin`); they load unconditionally, and tombstones in it
   suppress servers the agent unloaded. The overlay can never grant
-  `toolLifecycle`.
-- **Child env.** Stdio servers inherit the host env plus the entry's env and
-  a few house defaults. Each server's stderr goes to
-  `sessions/<id>/mcpl-stderr/<server>.log` (rotated at 10 MB).
+  `toolLifecycle` or `inheritEnv`.
+- **Child env.** Stdio servers get agent-framework's allowlist of host
+  variables (`CHILD_ENV_ALLOWLIST`: path, home, locale, temp dirs, TLS CA and
+  proxy settings), then `DISCORD_SUPPRESSED_REACTIONS_BASELINE` (the entry can
+  override it), the entry's `env` and `AGENT_TIMEZONE` (`composeMcplChildEnv`).
+  Anything else from `.env` must be mapped in the entry's `env`.
+  `inheritEnv: true` on an operator entry passes the whole host env. Each
+  server's stderr goes to `sessions/<id>/mcpl-stderr/<server>.log` (rotated
+  at 10 MB).
 
 ## Operator surfaces
 

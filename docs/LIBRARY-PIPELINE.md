@@ -237,7 +237,7 @@ Three things must line up — the Zulip subscription, the channel being open in 
 
 An open channel without a policy means messages arrive in context but don't wake the Clerk; a policy without an open, subscribed channel means nothing arrives at all. `wake_add_rule` applies immediately — no restart.
 
-The Clerk's own prompt still describes an older two-step version of this (`zulip--listen`, then `workspace--edit _config/gate.json`). As noted above, that edit doesn't reach the gate's file on its own, so if you ask the Clerk to add a channel, check the result with `gate_status`.
+The Clerk's own prompt covers steps 1 and 3 (`zulip--listen`, then `wake_add_rule`) but not step 2, so if you ask the Clerk to add a channel, check `channel_list` as well as `gate_status` afterwards. A rule added this way persists in the session's `gate.json` across restarts. A recipe rule (such as `tracker-channel`) removed this way comes back at the next startup, because reconciliation re-appends recipe policies missing from the file.
 
 ### Removing a channel
 
@@ -262,7 +262,7 @@ What opens channels initially is `channelSubscription` on the server entry:
 
 Values: `"auto"` (everything opens), `"manual"` (nothing opens unless the server marks it open; the agent opens channels explicitly), or `string[]` (allow-list of channel ids). If the field is omitted, the framework now defaults to `"manual"`. The Clerk uses an allow-list, `["zulip:${ZULIP_CHANNEL}"]`, so only its own channel opens; the Miner is `"manual"`; the Reviewer has no Zulip server.
 
-In agent-framework 0.19 the field is only a seed. Each channel's open/closed state is persisted in the session's Chronicle store, and after that the agent's `channel_open` / `channel_close` calls decide it — they outrank the recipe. Narrowing `channelSubscription` later won't close a channel an existing session already has open; close it with `channel_close`, or start a fresh session.
+In agent-framework 0.21 the field is only a seed. Each channel's open/closed state is persisted in the session's Chronicle store, and after that the agent's `channel_open` / `channel_close` calls decide it — they outrank the recipe. Narrowing `channelSubscription` later won't close a channel an existing session already has open; close it with `channel_close`, or start a fresh session.
 
 ### Lessons don't cross agents
 

@@ -284,9 +284,9 @@ ln -sfn ../../../connectome-local/context-manager/node_modules/@animalabs/chroni
                "subagents": false, "lessons": false, "retrieval": false
                /* + wake policies, workspace mounts (files/, notes/) */ },
   "mcpServers": {
-    "shell":   { /* terminal-sessions stdio server; env: SESSION_SERVER_TOKEN, SESSION_SERVER_PORT */ },
-    "discord": { /* discord-mcpl; env: DISCORD_TOKEN, DISCORD_GUILD_ID, ... */ },
-    "heartbeat": { /* heartbeat-mcpl; env: HEARTBEAT_CONFIG_FILE */ }
+    "shell":   { /* terminal-sessions stdio server; "env": { "SESSION_SERVER_TOKEN": "${SESSION_SERVER_TOKEN}", "SESSION_SERVER_PORT": "${SESSION_SERVER_PORT}" } */ },
+    "discord": { /* discord-mcpl; "env": { "DISCORD_TOKEN": "${DISCORD_TOKEN}", "DISCORD_GUILD_ID": "${DISCORD_GUILD_ID}", ... } */ },
+    "heartbeat": { /* heartbeat-mcpl; "env": { "HEARTBEAT_CONFIG_FILE": "${HEARTBEAT_CONFIG_FILE}" } */ }
   }
 }
 ```
@@ -341,6 +341,12 @@ SLEEP_PRIVILEGED_FILE=/home/<agent>/<agent>-cm/sleep-privileged.json
 COUNT_TOKENS_MODEL=<a live model id>     # optional override; makeup counts with the agent's own model by default (§11.4)
 ```
 
+Stdio MCPL servers see only what their entry declares in `env` (plus a small
+system allowlist — see the README's MCP section). Map every variable a server
+reads, as in the skeleton above. A variable left only in `.env` is unset for
+the server — and an unset `DISCORD_GUILD_ID` means every channel the bot is
+invited to (§7).
+
 ## 5b. Folding solver — `kv-stable` (default) vs `kv-unified` (opt-in)
 
 Both solvers decide, at every compile, which summaries to present and which raw
@@ -357,7 +363,7 @@ the configured prices), **continuity** (how much recent, still-referenced materi
 stays verbatim) and fidelity, and picks the cheapest acceptable one. On a large-budget
 resident (600k budget / 300k tail on a 1M-window model) it has cut effective cache
 spend materially (on the order of 40 % in our accounting). It is **fail-closed**:
-selecting it without every field is a recipe error — there are no live defaults.
+selecting it without every required field is a recipe-load error — there are no live defaults.
 
 Reference configuration in production (600k / 300k resident; tune `labelCeiling`
 and the bucket sizes to your budget):
@@ -395,14 +401,16 @@ and the bucket sizes to your budget):
 **Preconditions — read before flipping a resident:**
 
 - **Strictly contiguous summary forest.** kv-unified's bounded solve assumes every
-  summary owns a contiguous run of leaves. A store whose summaries cross (an old
-  head-window ratchet bug produced late single-message L1s stitched into era
-  summaries) forces the solver into *buffered* mode (`preserveGapBearingSummaries`
-  / internal holes), where label propagation can run away —
+  summary owns a contiguous run of leaves. A store whose summaries cross (the
+  pre-0.12 head-window ratchet produced late single-message L1s stitched into era
+  summaries) does not open at all under the default `reject` topology policy,
+  whatever the folding strategy (§11.8). Setting `preserveGapBearingSummaries` or
+  `treeifyNonContiguousSummaries` switches the policy to `report`: the store opens,
+  `compressionDebt` goes `critical`, and the solver runs *buffered* (internal holes),
+  where label propagation can run away —
   `exact label propagation exceeded ceiling <N>` at ~1.35× `labelCeiling`, deterministic,
-  survives restart, raising the ceiling only moves the number. Run the topology
-  audit first where your context-manager has one (§11.8 — the released 0.11.0
-  doesn't); repair or stay on `kv-stable`.
+  survives restart, raising the ceiling only moves the number. Audit (§11.8) and
+  repair first; staying on `kv-stable` does not open a crossed store either.
 - **`treeifyNonContiguousSummaries: true` is not an escape hatch** on a crossed
   store: it solves fast but drops the deepest summaries, and the floor can land
   above your budget (`budgetMet=false`).
@@ -415,9 +423,12 @@ and the bucket sizes to your budget):
 - `hysteresisCertificate: true` skips the full Pareto pass when the previously
   accepted layout is provably still selected — large latency win on quiet turns;
   `adoptEpsilon` is the score slack that lets an unchanged layout be retained.
-- Not every context-manager release carries every key; the host passes the
-  `kvUnified` object through whole, so an unknown key is a CM-side error at boot.
-  Pin the runtime and validate the recipe against it.
+- `hysteresisCertificate` is optional (off unless set); every other field is
+  required. The host checks the required keys at recipe load — including that
+  `treeifyNonContiguousSummaries` / `preserveGapBearingSummaries` are explicit
+  booleans and not both `true` — and passes the object through whole;
+  context-manager ignores keys it doesn't know, so a misspelled optional key
+  silently does nothing. Pin the runtime and validate the recipe against it.
 
 ---
 
@@ -607,20 +618,31 @@ before touching `treeifyNonContiguousSummaries`. `flat-profile` is the robust fa
 — this is not a permissions problem. The bot also needs **Read Message History** for backscroll
 (separate from View Channel).
 
-**11.8 — Store topology audit (unreleased context-manager only), and opening a store mutates
-it.** ⚠️ The audit/repair tooling below is **not in the released `@animalabs/context-manager`
-0.11.0 this host depends on**: that package has no `audit-topology.js` / `repair-topology.js`
-and no `StoreTopologyError`, this host does not forward a `strategy.topologyPolicy` recipe key
-(it is silently ignored), and `/healthz` has no topology field. It applies only if you run a
-context-manager checkout that has it — check for `<cm>/dist/scripts/audit-topology.js` before
-relying on any of this. On such a checkout, context-manager refuses to open a store whose
-summary ownership is crossed (`StoreTopologyError`; its `topologyPolicy` defaults to `reject`,
-while `report` logs and exposes `topologyViolations` instead — setting it from a recipe also
-needs a host that forwards the key). Before **any** context-manager upgrade of an existing
-resident, run the audit on a **copy of the stopped store**:
-`node <cm>/dist/scripts/audit-topology.js <store-copy> --namespace agents/<agent> --json > audit.json`
-(exit 2 on violations). Repair with `scripts/repair-topology.js <store> --namespace agents/<agent>
---mode lossless|compact|rebuild [--apply]` — on the *stopped* store, after a cold backup, then
+**11.8 — Store topology audit, and opening a store mutates it.** Since context-manager 0.12.0
+(this host depends on ^0.13.0) every load audits the summary archive for crossed ownership — a
+summary whose leaves are not contiguous in store order (the pre-0.12 head-window ratchet,
+restore/branch interleavings, hand surgery). Under the default `topologyPolicy: reject`,
+`ContextManager.open` throws `StoreTopologyError` and the resident does not boot — on `kv-stable`
+as on `kv-unified`; the store is left intact. `report` logs the violations and boots; a
+`kvUnified` block with `preserveGapBearingSummaries` or `treeifyNonContiguousSummaries` set to
+`true` defaults to it. This host does not forward a `strategy.topologyPolicy` recipe key (it is
+silently ignored), so the error's "set topologyPolicy: 'report'" hint is not reachable from a
+recipe — repair the store. Separately, a merge that would mint a crossed node is refused into the
+merge quarantine. Both show on `/healthz` as `compressionDebt.<agent>.topologyViolations` /
+`.topologyRefusals`, with `state: critical`. Before **any** context-manager upgrade of an existing
+resident — including a host upgrade from a pre-0.12 context-manager — run the audit on a **copy of
+the stopped store**:
+`node node_modules/@animalabs/context-manager/dist/scripts/audit-topology.js <store-copy> --namespace agents/<agent> --json > audit.json`
+(exit 0 clean, 2 violations, 1 could not open; a warning that it saw no summaries means a wrong
+`--namespace`). Repair the *stopped* store, after a cold backup, with
+`node …/dist/scripts/repair-topology.js <store> --namespace agents/<agent> [--mode lossless|compact|rebuild] [--rebuild-since <messageId|ISO date>] [--apply]`
+— a dry run unless `--apply`; after `--apply` it reopens the store under `reject` to verify (exit
+0 clean or verified, 2 plan incomplete or verification failed, 1 usage/open error). `lossless`
+(the default) only detaches, so the pyramid unravels around each fragment; `compact` keeps depth
+at the price of prose gaps; `rebuild` dissolves crossed towers back to L1 for the merge ladder to
+re-fold — run `…/dist/scripts/drain-autobiographical.js <store> agents/<agent> --apply
+--model=<model> --participant=<agent>` on the stopped store before restarting.
+`--rebuild-since` rebuilds only crossings from that message on and compacts older ones. Then
 re-audit to zero. Two traps: (a) any `ContextManager.open` with a normal strategy config chunks
 the store's frontier under *that* config — verify only with the `auditOnly` scripts, never by
 opening a live store from a one-off script; (b) reflink/rsync copies of a *running* store read
@@ -667,10 +689,12 @@ blocks; expect folds to interact with this on the next model generation.
 - **Per-call logs:** `data/llm-calls.<iso>.jsonl` (raw request + response + error) — rotates to a
   new file on every restart; re-list by mtime after a bounce. Counts *attempts*; `failures.log`
   counts *turns*.
-- **Topology audit / repair (unreleased context-manager only — not in 0.11.0, §11.8):**
-  `dist/scripts/audit-topology.js <store-copy> --namespace agents/<agent> --json`,
-  `dist/scripts/repair-topology.js … --mode lossless [--apply]` — stopped store, cold backup first
-- **Health:** `GET /healthz` — per-agent `compressionQuarantine`, `compressionDebt`,
+- **Topology audit / repair (context-manager ≥ 0.12, §11.8):**
+  `node node_modules/@animalabs/context-manager/dist/scripts/audit-topology.js <store-copy> --namespace agents/<agent> --json`
+  (exit 2 = crossed), `…/repair-topology.js <store> --namespace agents/<agent> --mode lossless [--apply]`
+  — stopped store, cold backup first
+- **Health:** `GET /healthz` — per-agent `compressionQuarantine`, `compressionDebt` (incl.
+  `topologyViolations` / `topologyRefusals`),
   `contextComposition` (head / raw / summaries / tail as last rendered), `runtimeSettings`
 - **Import guides:** [`claude-code-ingest.md`](./claude-code-ingest.md) ·
   [`claudeai-evacuation.md`](./claudeai-evacuation.md)

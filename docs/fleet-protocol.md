@@ -103,11 +103,15 @@ subject to the subscription filter: `inference:*`, `tool:*`, `usage:updated`,
 | `lifecycle` (`phase: "idle"`) | — | When every framework agent has been idle for ≥500 ms after at least one `inference:started`. Fires once per work→quiet transition. |
 | `lifecycle` (`phase: "exiting"`) | `reason` | `shutdown:graceful`, `shutdown:immediate`, `command:/quit`, `SIGTERM`, `SIGINT`, `exit-when-idle`. A crash emits nothing. |
 | `inference:speech` | `agentName, content` | Primary agent only: the text of an inference round that ended without tool calls. Used by `fleet--relay`. |
-| `command-output` | `text, style` | One per line of a `command` reply. |
+| `command-output` | `text, style` | One per line of a `command` reply. A response, not telemetry (see below). |
 
 **Responses** — `snapshot`, `lessons-snapshot`, `workspace-mounts-snapshot`,
 `workspace-tree-snapshot`, `workspace-file-snapshot`, `cancel-subagent-result`,
-`panel-response` — each echo `corrId`. Shapes are in `fleet-types.ts`. A
+`panel-response` — each echo `corrId`; `command-output` lines answer a
+`command` and carry none. A response goes only to the connection that sent the
+request: if that connection closes or is replaced while the work is pending,
+the reply is dropped and `headless.log` records its type and the reason.
+Shapes are in `fleet-types.ts`. A
 snapshot looks like:
 
 ```jsonc
@@ -129,8 +133,9 @@ name it assigned.
 - `lifecycle` is one event type with a `phase` field — subscribe to
   `lifecycle`; `lifecycle:*` does **not** match it.
 
-The seven response types bypass the filter. `lifecycle`, `command-output` and
-`inference:speech` do **not**; a narrowed subscription must list them.
+The eight response types — the seven `corrId` replies and `command-output` —
+bypass the filter, so a `command` gets its reply even under `[]`. `lifecycle`
+and `inference:speech` do **not**; a narrowed subscription must list them.
 
 ---
 
@@ -261,8 +266,9 @@ A recipe's `subscription` therefore means "events I want *in addition to* what
 rendering needs".
 
 **Not forced:** `lifecycle` (needed by `fleet--await`), `inference:speech`
-(needed by `fleet--relay`), `command-output` (needed to see `fleet--command`
-output) and `ops:alert`. A narrowed recipe must list the ones it wants.
+(needed by `fleet--relay`) and `ops:alert`. A narrowed recipe must list the
+ones it wants. `command-output` needs no entry: it bypasses the child's filter
+(§2.3).
 
 ### 4.5 Persistence, adoption, detach
 
@@ -337,9 +343,8 @@ Behavior of the code as it stands, worth knowing before relying on it:
 - **A ready-timeout leaves the child running.** `fleet--launch` returns an
   error but does not kill the process.
 - **Narrow subscriptions hide things.** `recipes/triumvirate.json` does not
-  subscribe its children to `command-output` or `ops:alert`, so `fleet--command`
-  output never reaches the parent's buffer and child ops alerts don't reach
-  the parent's TUI.
+  subscribe its children to `ops:alert`, so child ops alerts don't reach the
+  parent's TUI.
 
 ---
 

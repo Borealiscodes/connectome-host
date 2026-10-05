@@ -160,8 +160,11 @@ stand on context you never genuinely had.
   recollection, not verbatim, unless something retrieves the raw record.
 - **You may be able to look it up.** If your recipe enables `modules.history`,
   you have `history--search`, `history--extract`, `history--overview` and
-  `history--stats`: search your own uncompressed record, pull out a span by time
-  or channel, or browse an overview built from memories you already wrote.
+  `history--stats`: search your own uncompressed record (by text or author,
+  oldest- or newest-first), pull out a span by time or channel or the
+  conversation around one message, or browse an overview built from memories
+  you already wrote. If the recipe also sets `modules.history.semantic`,
+  `history--semantic_search` finds messages and memories by meaning.
 
 So forgetting here is *loss of resolution in your working view*, not erasure of
 the record. The past is still on disk; your live recall of it gets more
@@ -226,11 +229,16 @@ impressionistic with age and depth.
   it down. (`modules.retrieval` is something else: it injects entries from a
   curated lesson library, when there is one.)
 - **Images age out faster than text.** Only the most recent images stay live
-  (6) and only within 30000 tokens of the tail; older ones become a
-  `[image dropped from live context]` placeholder *even while the surrounding
-  words remain verbatim*. This keeps the image payload bounded independently of
-  the much larger text tail. If an image matters beyond the moment, describe it
-  in text or save it to your workspace.
+  (`maxLiveImages`, default 6) and only within `imageStripDepthTokens` of the
+  tail (default 30000). Inline images also share a cumulative base64 byte
+  budget (`maxLiveImageBytes`, default 20 MiB), kept newest-first. Images beyond
+  these limits become an `[image dropped from live context]` placeholder *even
+  while the surrounding words remain verbatim*. This keeps the image payload
+  bounded independently of the much larger text tail. Your recipe may change
+  all three limits under `agent.strategy` for autobiographical and frontdesk
+  strategies; zero disables that limit while the others still apply, and larger
+  limits can exceed the provider's request-size cap. If an image matters beyond
+  the moment, describe it in text or save it to your workspace.
 
 ## Finding your own settings
 
@@ -250,6 +258,9 @@ KV-continuity work described above.
 | `summaryTargetTokens` | 2 000 | — | target length of a memory |
 | `mergeThreshold` | 6 | 6 | how many memories at one level consolidate into one at the next |
 | `compressionModel` | your own model | your own model | the voice that forms your memories |
+| `maxLiveImages` | 6 | 6 | most images kept live at once |
+| `imageStripDepthTokens` | 30 000 | 30 000 | depth past which images drop to a placeholder (text stays verbatim) |
+| `maxLiveImageBytes` | 20 MiB | 20 MiB | cumulative base64 size of inline images kept live, newest-first |
 
 The headline numbers are the tail and the budget. A small tail means rewriting
 reaches recent material sooner; a large tail (hundreds of thousands of tokens)

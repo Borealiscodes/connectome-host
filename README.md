@@ -180,8 +180,9 @@ an id from **`mcpl-servers.json`** — a registry in the working directory
 loads only when a recipe names its id. For a named id the registry supplies
 the command, args and env, and the recipe entry may carry only policy fields —
 no `command` or `url` needed: `channelSubscription`, `toolPrefix`, feature-set
-and tool toggles, reconnect settings, WebSocket transport, `access` and
-`toolLifecycle` (`RECIPE_OVERRIDABLE_SERVER_FIELDS` in `src/mcpl-config.ts`).
+and tool toggles, reconnect settings, WebSocket transport, `access`,
+`toolLifecycle` and `inheritEnv` (`RECIPE_OVERRIDABLE_SERVER_FIELDS` in
+`src/mcpl-config.ts`).
 An id-only entry the registry doesn't define is a startup error. Changes take
 effect on restart.
 
@@ -192,6 +193,12 @@ the recipe.
 Per server, `requestTimeoutMs` raises the framework's JSON-RPC timeout (60 s
 by default) for slow tools, and `agent.retry` passes a Membrane retry policy
 through for flaky gateways.
+
+Stdio servers do **not** inherit the host environment. A child gets agent-framework's allowlist (`CHILD_ENV_ALLOWLIST`: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `LANG`, `LC_*`, `TZ`, temp and XDG dirs, `DISPLAY`/`WAYLAND_DISPLAY`, TLS CA bundles, `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` in either case, and the Windows system variables), then the host's `DISCORD_SUPPRESSED_REACTIONS_BASELINE`, then the entry's `env`, then `AGENT_TIMEZONE`. A server that needs a value from `.env` must declare it, e.g. `"DISCORD_GUILD_ID": "${DISCORD_GUILD_ID}"`; a variable left only in `.env` is unset for the server.
+
+Operator-owned recipe/file entries can set `inheritEnv: true` to pass the full host environment, including credentials. Prefer explicit `env` entries for needed variables. Explicit recipe `false` overrides file `true`; omission preserves the file's policy. Agent-owned `mcpl-servers.agent.json` overlays strip `inheritEnv`, including when replacing an operator-defined server. Put a full-inheritance grant in the recipe or operator server file instead.
+
+Check legacy configuration variables before enabling full inheritance. For Discord MCPL, an inherited `DISCORD_SUPPRESS_REACTION_EMOJIS=""` seeds an explicit empty suppression list when its configured filters file does not yet exist; that durable file then overrides the protective baseline. Remove an unintended stale variable before the first startup, or configure the intended suppression in the filters file.
 
 ### Tool lifecycle and tool classes (MCPL RFC-007 / RFC-008)
 
@@ -354,7 +361,17 @@ classic prefill-style prompting for agents migrated from prefill-era bots.
   Chronicle: the agent's durable, verbatim notes. Default mounts `input`
   (read-only `./input`) and `products` (read-write `./output`)
 - **History** (opt-in, `modules.history`) — the agent searches and extracts
-  from its own uncompressed record
+  from its own uncompressed record. The object form
+  `{ "semantic": { "url": … } }` adds `history--semantic_search`:
+  meaning-based search over raw messages and memories, through a shared
+  embed service (startup fails if the installed agent-framework predates
+  0.20). The
+  index namespace is always `<prefix>/<session id>`, the prefix defaulting to
+  the agent name; `token` takes `${VAR}`; plain `http` is refused outside
+  loopback and the tailnet unless `allowInsecureHttp: true`; unknown keys fail
+  the load. Sync sends the raw record — including the agent's private notes
+  unless `includePrivateTools: false` — and `/session delete` does not remove
+  the remote index
 - **Shared instructions** (opt-in, `modules.instructions`) — see below
 - **Identity** (opt-in, `modules.identity`) — the agent's own key-based
   identity, used to obtain access to services without credentials entering
