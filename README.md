@@ -376,10 +376,17 @@ classic prefill-style prompting for agents migrated from prefill-era bots.
 - **Identity** (opt-in, `modules.identity`) — the agent's own key-based
   identity, used to obtain access to services without credentials entering
   its context
-- **Conversations** (top-level `conversations`) — per-channel conversation
-  forks spawned from a dormant trunk agent; **subconscious** (top-level
-  `subconscious`) — a secondary agent that can `tune_out` channels;
-  **code execution** (top-level `codeExecution`) — a Python tool runner
+- **Conversations** (top-level `conversations` — **deprecated, not
+  recommended**) — per-channel conversation forks spawned from a dormant trunk
+  agent. Being retired
+  ([agent-framework#235](https://github.com/anima-research/agent-framework/issues/235)):
+  its `'mention'` bind/trigger rule, the default for channels, reads
+  `metadata.mentioned`, which discord-mcpl does not set, so on Discord
+  channels an @-mention never binds or triggers a fork. Still works; the host
+  logs a `[deprecated]` line at startup
+- **Subconscious** (top-level `subconscious`) — a secondary agent that can
+  `tune_out` channels; **code execution** (top-level `codeExecution`) — a
+  Python tool runner
 - **Activity** (`modules.activity`) typing indicators and a **TTS relay**
   (`modules.ttsRelay`) for voice clients
 - **Extensions** (top-level `extensions`) — local modules that register

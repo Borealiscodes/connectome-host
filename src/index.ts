@@ -67,6 +67,7 @@ import {
   loadSavedRecipe,
   clearSavedRecipe,
   parseRecipeArg,
+  deprecatedConversationsNotices,
 } from './recipe.js';
 import { createBranchState, resetBranchState, handleExport, type BranchState } from './commands.js';
 import { buildFrameworkAgentConfig, membraneCachingOverride } from './framework-agent-config.js';
@@ -494,6 +495,8 @@ async function createFramework(
 
   // Per-channel conversation routing: the recipe agent becomes the trunk
   // template; forks get a fresh instance of the same recipe strategy.
+  // Deprecated (agent-framework#235): still wired, but named at startup.
+  for (const notice of deprecatedConversationsNotices(recipe.conversations)) console.warn(`[deprecated] ${notice}`);
   const conversations = buildConversationsConfig(recipe, agentName, model, timeZone, extensionRegistry);
 
   // -- Create framework --
