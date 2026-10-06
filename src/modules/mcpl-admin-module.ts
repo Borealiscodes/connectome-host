@@ -134,8 +134,10 @@ export class McplAdminModule implements Module {
           '(WebSocket). Relative ./ args resolve against the host working directory. ' +
           'Sensible defaults: omit (or pass empty) the list fields and every feature ' +
           'set and tool the server offers is available; an empty array means ' +
-          '"unspecified", never deny-all (deny-all is disabledTools/' +
-          'disabledFeatureSets: ["*"]). Self-deployed servers get channels + tools ' +
+          '"unspecified", never deny-all. Deny-all for tools is disabledTools: ["*"]; ' +
+          'in feature-set patterns `*` matches exactly one dot-separated segment, so ' +
+          'deny every set with disabledFeatureSets: ["*", "*.*", "*.*.*"] (names up ' +
+          'to three segments). Self-deployed servers get channels + tools ' +
           'only — consequential capabilities (context hooks around your inference, ' +
           'server-initiated inference, inference lifecycle) are host-masked; a server ' +
           'that genuinely needs one is an operator conversation, not a deploy flag.',
@@ -330,11 +332,12 @@ export class McplAdminModule implements Module {
     if (typeof input.reconnect === 'boolean') entry.reconnect = input.reconnect;
     // Empty arrays are NOT persisted: OpenAI-style strict function calling
     // forces every schema property, so callers emit `[]` meaning
-    // "unspecified" — and a persisted empty ALLOWLIST is deny-all under the
-    // §5.3 pin (Mica's silently eventless eidoverse, 2026-08-04).
+    // "unspecified" — and a persisted empty enabledFeatureSets is deny-all
+    // under the §5.3 pin (Mica's silently eventless eidoverse, 2026-08-04).
     // resolveOverlayEntry drops them at read time too; this keeps the file
-    // itself from carrying the trap. Deny-all is spelled ["*"] on the
-    // deny-lists.
+    // itself from carrying the trap. Deny-all is disabledTools: ["*"] for
+    // tools; for feature sets `*` matches one dot-separated segment, so it
+    // takes a pattern per depth (see resolveOverlayEntry).
     if (Array.isArray(input.enabledFeatureSets) && input.enabledFeatureSets.length) entry.enabledFeatureSets = input.enabledFeatureSets.map(String);
     if (Array.isArray(input.disabledFeatureSets) && input.disabledFeatureSets.length) entry.disabledFeatureSets = input.disabledFeatureSets.map(String);
     if (Array.isArray(input.enabledTools) && input.enabledTools.length) entry.enabledTools = input.enabledTools.map(String);

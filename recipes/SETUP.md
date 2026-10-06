@@ -71,7 +71,7 @@ No separate installation needed — the recipe uses `npx` to run `@zereight/mcp-
 
 ### Notion (optional, via an MCP server — not included by default)
 
-The recipe ships **without** a Notion server: the adapter its prompt was developed against (`syncntn`) is not publicly available. If you want the agent to read your Notion workspace, add an `mcpServers` entry pointing at any MCP server that exposes Notion search and page-read tools. The entry name `syncntn` is just a label — any Notion MCP server works, as long as its exposed tool names match what the system prompt references (`syncntn--search_pages`, `syncntn--get_page_markdown`, and friends). If your server uses different tool names, either name the MCP key `syncntn` and update the prompt, or accept that the agent will discover the tools under whatever names they export.
+The recipe ships **without** a Notion server: the adapter its prompt was developed against (`syncntn`) is not publicly available. If you want the agent to read your Notion workspace, add an `mcpServers` entry pointing at any MCP server that exposes Notion search and page-read tools. The entry name `syncntn` is just a label, but the prompt depends on it: the agent sees each tool as `mcpl--<entry name>--<tool>`, and the system prompt references `mcpl--syncntn--search_pages`, `mcpl--syncntn--get_page_markdown` and friends. Any Notion MCP server works if you name its entry `syncntn` and it exports tools with those names (`search_pages`, `get_page_markdown`, …). If its tool names differ, update the prompt to match, or accept that the agent will discover the tools under whatever names they export.
 
 Typical setup:
 
