@@ -840,6 +840,9 @@ async function runPiped(app: AppContext) {
     if (session) {
       const dir = mcplStderrLogDir(app.sessionManager.getStorePath(session.id));
       const now = Date.now();
+      // setupMcplStderrLog creates the directory without awaiting it; a
+      // fresh session with empty stdin can get here first.
+      await mkdir(dir, { recursive: true }).catch(() => {});
       // Awaited so the note lands before the `connection closed` line.
       await Promise.all(serverIds.map((id) => appendMcplLogLine(dir, id, now, BATCH_MCPL_LOG_NOTE)));
     }

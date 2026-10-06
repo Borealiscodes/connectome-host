@@ -390,6 +390,13 @@ interface SharedServerState {
 
 let sharedServer: SharedServerState | null = null;
 
+/** An openable URL for a bind address: IPv6 literals (the `::1` loopback
+ *  bind, say) need brackets, or the port reads as part of the address. */
+export function webUiHttpUrl(host: string, port: number): string {
+  const literal = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  return `http://${literal}:${port}`;
+}
+
 export class WebUiModule implements Module {
   readonly name = 'webui';
 
@@ -486,7 +493,7 @@ export class WebUiModule implements Module {
       }
     }) ?? null;
 
-    console.log(`[webui] listening on http://${host}:${boundPort}`);
+    console.log(`[webui] listening on ${webUiHttpUrl(host, boundPort)}`);
   }
 
   async stop(): Promise<void> {
@@ -508,7 +515,7 @@ export class WebUiModule implements Module {
    *  It outlives stop(), so batch mode reports it after the agent stops. */
   listeningUrl(): string | null {
     if (!sharedServer) return null;
-    return `http://${sharedServer.host}:${sharedServer.port}`;
+    return webUiHttpUrl(sharedServer.host, sharedServer.port);
   }
 
   getTools(): ToolDefinition[] { return []; }

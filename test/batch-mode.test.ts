@@ -10,6 +10,7 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync, readdirSync, statSync
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { webUiHttpUrl } from '../src/modules/web-ui-module.js';
 import {
   batchModeStartNotice,
   batchTeardownNotice,
@@ -36,6 +37,13 @@ describe('batch-mode notices', () => {
     expect(batchTeardownNotice([])).toBe(
       '[batch] stopping the agent: batch run complete — use --headless to keep serving',
     );
+  });
+
+  test('the webui URL brackets an IPv6 bind', () => {
+    expect(webUiHttpUrl('::1', 7340)).toBe('http://[::1]:7340');
+    expect(webUiHttpUrl('[::1]', 7340)).toBe('http://[::1]:7340');
+    expect(webUiHttpUrl('127.0.0.1', 7340)).toBe('http://127.0.0.1:7340');
+    expect(webUiHttpUrl('localhost', 0)).toBe('http://localhost:0');
   });
 
   test('the webui notice gives the URL and how to exit', () => {
@@ -102,7 +110,8 @@ function startBatch(dir: string, recipePath: string, input: string) {
   child.stdout!.on('data', (c: Buffer) => { stdout += c.toString('utf-8'); });
   child.stderr!.on('data', () => { /* drain */ });
   child.stdin!.end(input);
-  const exited = new Promise<number | null>((r) => child.on('exit', (code) => r(code)));
+  // 'close', not 'exit': only then have the stdio pipes delivered everything.
+  const exited = new Promise<number | null>((r) => child.on('close', (code) => r(code)));
   return { child, exited, out: () => stdout };
 }
 
@@ -134,10 +143,11 @@ describe('batch mode end to end', () => {
     const run = startBatch(dir, recipePath, 'hello\n');
     // The inference wait's 120 s safety timer used to outlive the reply and
     // hold the process open for two minutes after `Done.`.
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const outcome = await Promise.race([
       run.exited,
-      new Promise<'still running'>((r) => setTimeout(() => r('still running'), 30_000)),
-    ]);
+      new Promise<'still running'>((r) => { timer = setTimeout(() => r('still running'), 30_000); }),
+    ]).finally(() => clearTimeout(timer));
     if (outcome === 'still running') {
       run.child.kill('SIGKILL');
       await run.exited;
