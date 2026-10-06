@@ -56,6 +56,7 @@ import { TtsRelayModule } from './modules/tts-relay-module.js';
 import { InstructionsModule } from './modules/instructions-module.js';
 import { loadMcplServers, applyAgentOverlay, mergeRecipeServers, composeMcplChildEnv, DEFAULT_CONFIG_PATH, DEFAULT_AGENT_OVERLAY_PATH } from './mcpl-config.js';
 import { toolClassConfig } from './tool-lifecycle-config.js';
+import { mockAdapterConfig } from './mock-provider.js';
 import { SessionManager } from './session-manager.js';
 import { resolveAgentName } from './agent-name.js';
 import { generateSessionName } from './synesthete.js';
@@ -957,16 +958,12 @@ async function main() {
   // provider spend and no credentials (none of the key checks above are
   // gated on it). Echo is the default because it's the informative shape
   // for interactive smoke runs; recipe agent.mock.echoMode=false switches
-  // to defaultResponse for deterministic scripted output. It rides the
+  // to defaultResponse for deterministic scripted output; the delay, chunk
+  // and responseQueue knobs pass through as well (RecipeMockConfig). It rides the
   // generic logging decorator so even mock calls leave llm-calls.jsonl
   // receipts — the observability path is part of what a mock run exercises.
   const mockAdapter = provider === 'mock'
-    ? new MockAdapter({
-        echoMode: recipe.agent.mock?.echoMode ?? true,
-        ...(recipe.agent.mock?.defaultResponse !== undefined
-          ? { defaultResponse: recipe.agent.mock.defaultResponse }
-          : {}),
-      })
+    ? new MockAdapter(mockAdapterConfig(recipe.agent.mock))
     : undefined;
   // -- x-gate-debt-chunks stamp (membrane dynamicHeaders, antra-tess/membrane#65)
   // The gate records compression-debt per ledger row; debt only changes at

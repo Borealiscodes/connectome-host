@@ -332,11 +332,47 @@ depend on what the endpoint reports.
 | `bedrock` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` (default `us-west-2`) | Claude on AWS — including models retired from the first-party API. `BEDROCK_BASE_URL` routes through an inference gateway. Prompt caching is enabled per model where Bedrock supports it; `agent.promptCaching` overrides. |
 | `openai-responses` | `OPENAI_API_KEY` (`OPENAI_BASE_URL` optional) | OpenAI Platform, Responses API. |
 | `openrouter` | `OPENROUTER_API_KEY` | |
-| `mock` | none | Echoes the last user message, or returns `agent.mock.defaultResponse` with `echoMode: false`. Calls are still logged. |
+| `mock` | none | Echoes the last user message by default; scripted replies and timing are set under `agent.mock` ([below](#mock-provider)). Calls are still logged. |
 
 Every provider's calls are logged to `$DATA_DIR/llm-calls.<iso>.jsonl`.
 `agent.formatter: "anthropic-xml"` with `agent.prefillUserMessage` reproduces
 classic prefill-style prompting for agents migrated from prefill-era bots.
+
+### Mock provider
+
+`agent.provider: "mock"` runs membrane's `MockAdapter`: the full host loop
+with no credentials and no provider spend. `agent.mock` configures it:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `echoMode` | `true` | Reply `[Echo] <last user message>`. |
+| `defaultResponse` | membrane's canned text | Reply when not echoing and the queue is empty. A non-empty string. |
+| `responseQueue` | none | Replies returned in order, one per provider call, before the echo or `defaultResponse` takes over. Every call through the adapter takes one, including auxiliary calls such as compression and session naming. Non-empty strings. |
+| `completeDelayMs` | `10` | Delay before a non-streamed reply, in ms. Agent turns stream; auxiliary calls take this path. |
+| `streamChunkDelayMs` | `5` | Delay between streamed chunks, in ms. There is none before the first chunk. |
+| `streamChunkSize` | `10` | Characters per streamed chunk. A positive integer. |
+
+A streamed reply of `L` characters takes about
+`(ceil(L / streamChunkSize) - 1) × streamChunkDelayMs`, so a slow agent turn
+is a long reply with small chunks. This one holds the first turn for about
+2 s, which leaves time to send more events while it is in flight and see how
+they coalesce:
+
+```json
+"agent": {
+  "provider": "mock",
+  "mock": {
+    "echoMode": false,
+    "responseQueue": ["first reply", "second reply"],
+    "defaultResponse": "done",
+    "streamChunkSize": 1,
+    "streamChunkDelayMs": 200
+  }
+}
+```
+
+Unknown keys under `agent.mock` are reported in the recipe's
+unknown-key warning, like those at the other levels.
 
 ## What it provides
 
