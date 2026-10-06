@@ -120,18 +120,27 @@ describe('the host builds its mock from agent.mock', () => {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let out = '';
+    let err = '';
+    let closed = false;
     child.stdout!.on('data', (c: Buffer) => { out += c.toString('utf-8'); });
-    child.stderr!.on('data', () => { /* drain */ });
-    const exited = new Promise<void>((r) => child.on('exit', () => r()));
+    child.stderr!.on('data', (c: Buffer) => { err += c.toString('utf-8'); });
+    // 'close', not 'exit': only then have the stdio pipes delivered everything.
+    const done = new Promise<void>((r) => child.on('close', () => { closed = true; r(); }));
     child.stdin!.end('hello\n');
     try {
+      // Stop early if the host dies at startup, rather than waiting it out.
       const deadline = Date.now() + 30_000;
-      while (!out.includes('Done.') && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
-      expect(out).toContain('queued reply from the recipe');
-      expect(out).not.toContain('[Echo]');
+      while (!out.includes('Done.') && !closed && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const replied = out.includes('queued reply from the recipe');
+      const echoed = out.includes('[Echo]');
+      // On failure the diff carries the host's own output, e.g. a startup error.
+      const output = replied && !echoed ? '' : `stdout:\n${out}\nstderr (tail):\n${err.slice(-4000)}`;
+      expect({ replied, echoed, output }).toEqual({ replied: true, echoed: false, output: '' });
     } finally {
       child.kill('SIGKILL');
-      await exited;
+      await done;
     }
   }, 60_000);
 });
