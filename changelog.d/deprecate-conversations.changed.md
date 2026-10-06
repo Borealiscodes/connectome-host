@@ -6,5 +6,7 @@
   `[deprecated]` line at startup when a recipe sets `conversations`
   (`deprecatedConversationsNotices()` in `recipe.ts`). `Recipe.conversations`
   and `RecipeConversations` carry `@deprecated`, and the `idleTtlMs` docs now
-  note that expiry is checked at most about once a minute, so short TTLs close
-  up to ~60s late.
+  note that expiry is checked at most about once a minute, so the sweep usually
+  notices an expired binding up to ~60s after the TTL; that is not a deadline
+  for closing the fork, whose closure turn can be delayed further (e.g. while
+  the host is quiesced).
