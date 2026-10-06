@@ -235,13 +235,18 @@ function ToolClasses(props: { rows: ToolClassRow[] }) {
       <Show when={open()}>
         <div class="mt-1 border border-neutral-800 rounded bg-neutral-950 divide-y divide-neutral-900">
           <For each={props.rows}>{(r) => (
-            <div class="px-2 py-0.5 flex items-baseline gap-2">
-              <span class="font-mono text-neutral-200 truncate" title={r.tool}>{r.tool}</span>
-              <span class="font-mono text-[10px] text-neutral-400 shrink-0">
-                {r.class.length > 0 ? r.class.join(',') : '—'}
-              </span>
-              <span class={`text-[10px] shrink-0 ml-auto ${SOURCE_TONE[r.source]}`} title={SOURCE_TITLE[r.source]}>
-                {SOURCE_LABEL[r.source]}{r.serverId ? ` · ${r.serverId}` : ''}
+            // Wraps instead of squeezing: when class + source don't fit
+            // beside the name they drop to a second line, so the tool name
+            // always keeps the row's width.
+            <div class="px-2 py-0.5 flex flex-wrap items-baseline gap-x-2">
+              <span class="font-mono text-neutral-200 truncate min-w-0 max-w-full" title={r.tool}>{r.tool}</span>
+              <span class="ml-auto min-w-0 flex flex-wrap justify-end items-baseline gap-x-2 text-[10px]">
+                <span class="font-mono text-neutral-400 break-all">
+                  {r.class.length > 0 ? r.class.join(',') : '—'}
+                </span>
+                <span class={`break-all ${SOURCE_TONE[r.source]}`} title={SOURCE_TITLE[r.source]}>
+                  {SOURCE_LABEL[r.source]}{r.serverId ? ` · ${r.serverId}` : ''}
+                </span>
               </span>
             </div>
           )}</For>

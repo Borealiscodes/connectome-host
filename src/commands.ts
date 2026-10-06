@@ -271,7 +271,7 @@ export function handleCommand(command: string, app: AppContext): CommandResult {
       return handleMcp(args);
 
     case 'tools':
-      return handleTools(framework, args[0]);
+      return handleTools(framework, args.join(' ') || undefined);
 
     case 'budget':
       return handleBudget(framework, args[0]);
@@ -1197,7 +1197,7 @@ function handleTools(framework: AgentFramework, agentName?: string): CommandResu
   }
   const [summary, ...table] = formatToolClassRows(rows);
   const lines: Line[] = [
-    { text: `--- Tool classes: ${rows.length} tools (${scope}) ---`, style: 'system' },
+    { text: `--- Tool classes: ${rows.length} tool${rows.length === 1 ? '' : 's'} (${scope}) ---`, style: 'system' },
     { text: `  ${summary}`, style: 'system' },
     ...table.map((text): Line => ({ text: `  ${text}`, style: 'system' })),
   ];

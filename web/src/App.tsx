@@ -132,6 +132,9 @@ export function App() {
   /** session.id + '/' + branch.id of the last welcome; same key → soft
    *  merge (keep paged-in scrollback), changed key → hard reset. */
   let welcomeKey: string | null = null;
+  /** session.id of the last welcome, to tell a session switch apart from a
+   *  first connect or a reconnect. */
+  let welcomeSessionId: string | null = null;
   /** Whether the operator is pinned to the bottom of the scroll pane.
    *  Autoscroll only fires when true, so reading history isn't yanked. */
   let atBottom = true;
@@ -507,6 +510,12 @@ export function App() {
     setMcplLoaded(false);
     wire.send({ type: 'request-mcpl', scope: panelScope() });
   };
+  const clearMcpl = (): void => {
+    setMcplLoaded(false);
+    setMcplServers([]);
+    setMcplLive([]);
+    setMcplToolClasses(undefined);
+  };
 
   /** Context-settings panel state. The server BROADCASTS `settings-state` after
    *  every mutation (unlike mcpl-list, which is requester-only), because these
@@ -579,10 +588,7 @@ export function App() {
     setExpandedMounts(new Set<string>());
     setOpenFile(null);
     setFileLoading(false);
-    setMcplLoaded(false);
-    setMcplServers([]);
-    setMcplLive([]);
-    setMcplToolClasses(undefined);
+    clearMcpl();
     setSettingsLoaded(false);
     setSettingsState(null);
     setPinsLoaded(false);
@@ -762,6 +768,13 @@ export function App() {
     if (panelScope() !== 'local' && !msg.childTrees.some((c) => c.name === panelScope())) {
       changePanelScope('local');
     }
+    // A session switch recreates the framework: MCPL servers reconnect and
+    // may offer other tools or classes, so the MCP tab's snapshot is stale.
+    if (welcomeSessionId !== null && msg.session.id !== welcomeSessionId) {
+      clearMcpl();
+      if (sidebarTab() === 'mcp') refreshMcpl();
+    }
+    welcomeSessionId = msg.session.id;
     const key = `${msg.session.id}/${msg.branch.id}`;
     const entries = msg.messages.map(entryToMessage);
 

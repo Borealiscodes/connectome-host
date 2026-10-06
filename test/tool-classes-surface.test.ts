@@ -91,6 +91,15 @@ describe('/tools', () => {
     expect(texts('/tools nobody', framework)).toEqual(['Unknown agent: nobody']);
   });
 
+  test('takes the rest of the line as the agent name (names may contain spaces)', () => {
+    const asked: Array<string | undefined> = [];
+    const rows: ToolClassRow[] = [{ tool: 'time--now', class: ['control'], source: 'host' }];
+    const fw = { listToolClasses: (agent?: string) => { asked.push(agent); return rows; } };
+    expect(texts('/tools Custom Import', fw)[0]).toBe('--- Tool classes: 1 tool (Custom Import) ---');
+    texts('/tools', fw);
+    expect(asked).toEqual(['Custom Import', undefined]);
+  });
+
   test('a framework without the listing says so', () => {
     expect(texts('/tools', {})).toEqual(['This agent-framework build does not report tool classes.']);
   });
