@@ -504,6 +504,13 @@ export class WebUiModule implements Module {
     sharedServer.app = null;
   }
 
+  /** Where the process-level web server listens, or null if none is up.
+   *  It outlives stop(), so batch mode reports it after the agent stops. */
+  listeningUrl(): string | null {
+    if (!sharedServer) return null;
+    return `http://${sharedServer.host}:${sharedServer.port}`;
+  }
+
   getTools(): ToolDefinition[] { return []; }
 
   async handleToolCall(_call: ToolCall): Promise<ToolResult> {

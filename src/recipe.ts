@@ -397,8 +397,18 @@ export interface RecipeMcpServer {
    * credentials per dial; neither the recipe nor the agent holds one.
    */
   access?: string;
+  /** Namespace for this server's model-facing tool names. Default
+   *  `mcpl--<id>`, so tools surface as `mcpl--<id>--<tool>`. */
   toolPrefix?: string;
+  /**
+   * Feature-set allow-list (`*` matches one dot-separated segment). Omitted:
+   * every declared set is a candidate. `[]`: none (deny-all), in a recipe or
+   * mcpl-servers.json alike; only the agent's own overlay file reads `[]` as
+   * unset. A set whose declaration has no valid `uses` stays disabled either
+   * way (MCPL §6.4, fail-closed).
+   */
   enabledFeatureSets?: string[];
+  /** Feature-set deny-list; wins over enabledFeatureSets on overlap. */
   disabledFeatureSets?: string[];
   /**
    * Tool allow-list (bare tool names as the server exports them, no toolPrefix).
@@ -455,7 +465,9 @@ export interface RecipeMcpServer {
 /** A narrowing for one tool-lifecycle path (RFC-007 §4.3). Every stated key
  *  must hold; patterns use the RFC-007 §6.2 grammar (`*` = any run). */
 export interface RecipeToolLifecycleNarrowing {
-  /** Patterns over the model-facing tool name (`computer--*`). */
+  /** Patterns over the model-facing tool name: `mcpl--<serverId>--<tool>`
+   *  for an MCPL server's tools unless its entry sets `toolPrefix`
+   *  (`mcpl--cua--*`), `<module>--<tool>` for host modules. */
   tools?: string[];
   /** RFC-008 classes the tool must have one of; `"default"` = computer,
    *  shell, files, web, media, body. */
@@ -1096,7 +1108,10 @@ export interface Recipe {
    * highest-precedence source of a tool's class, and the way to class
    * third-party MCP servers (blender, computer use, …) that will never
    * declare `_meta["mcpl/class"]`. Replaces, never merges with, what the
-   * server declared. First matching pattern wins.
+   * server declared. First matching pattern wins. Patterns match the
+   * model-facing name, so an MCPL server's tools are
+   * `mcpl--<serverId>--<tool>` (`"mcpl--blender--*": ["media"]`) unless its
+   * entry sets `toolPrefix`.
    */
   toolClassOverrides?: Record<string, string[]>;
 }

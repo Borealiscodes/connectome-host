@@ -237,7 +237,7 @@ Instead of editing the recipe, you can keep a server's launch command and creden
 /mcp env gitlab GITLAB_PERSONAL_ACCESS_TOKEN=glpat-xxx GITLAB_API_URL=https://gitlab.myco.com/api/v4
 ```
 
-A file entry is used only when the recipe names the same id under `mcpServers` (the miner recipe does name `gitlab`). For that id the file supplies `command`, `args` and `env`; the recipe entry can still override policy fields such as `channelSubscription`, `toolPrefix`, tool/feature-set filters and reconnect settings. The recipe is still loaded with `${VAR}` substitution first, so while its `gitlab` block references `${GITLAB_TOKEN}`, that variable must be set (or the `env` removed from the recipe's block) even though the file's values are the ones used.
+A file entry is used only when the recipe names the same id under `mcpServers` (the miner recipe does name `gitlab`). For that id the file supplies `command`, `args` and `env`; the recipe entry can still override policy fields such as `channelSubscription`, `toolPrefix`, tool/feature-set filters and reconnect settings. An empty `enabledFeatureSets: []` in either file enables no feature sets rather than all of them; see [Feature sets and tool names](../README.md#feature-sets-and-tool-names). The recipe is still loaded with `${VAR}` substitution first, so while its `gitlab` block references `${GITLAB_TOKEN}`, that variable must be set (or the `env` removed from the recipe's block) even though the file's values are the ones used.
 
 Changes require a restart to take effect.
 
