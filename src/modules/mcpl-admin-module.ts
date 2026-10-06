@@ -120,8 +120,8 @@ export class McplAdminModule implements Module {
         description:
           'List all MCPL servers: connection/retry state, whether policy was established, ' +
           'the effective grant, masked/denied capability paths, host-command authority, ' +
-          'validated manifest revision/fetch/negotiation freshness, tool count, target, ' +
-          'and config source.',
+          'validated manifest revision/fetch/negotiation freshness, tool count, each tool\'s ' +
+          'effective class and where it came from, target, and config source.',
         inputSchema: { type: 'object', properties: {} },
       },
       {
@@ -252,6 +252,7 @@ export class McplAdminModule implements Module {
           lastFetchedAt: number | null;
           lastNegotiatedAt: number | null;
         };
+        toolClasses?: ServerToolClass[];
       }
     >;
     const overlay = readAgentOverlay(this.overlayPath);
@@ -277,6 +278,7 @@ export class McplAdminModule implements Module {
         `denied=${formatCapabilityList(s.deniedCapabilities)}, ` +
         `hostCommands=${hostCommands}, ` +
         `manifest=${formatManifestState(s.manifestState)}; ${s.toolCount} tools, ` +
+        `classes=${formatServerToolClasses(s.toolClasses)}, ` +
         `prefix=${s.toolPrefix}, source=${source}, ${target}`,
       );
     }
@@ -422,6 +424,35 @@ export class McplAdminModule implements Module {
 
     return ok(`Unloaded server "${id}" — its tools are gone from your toolset. ${persistNote}`);
   }
+}
+
+/** One of a server's tools with its effective class (RFC-008 §6), as
+ *  listMcplServers() reports it on frameworks with tool classes. */
+interface ServerToolClass {
+  tool: string;
+  serverTool: string;
+  class: string[];
+  source: 'override' | 'host' | 'server' | 'none';
+}
+
+/**
+ * A server's tools grouped by effective class and source, e.g.
+ * `{comms/server: say,send; media/override: render; unclassed: probe}`.
+ * Sources: `server` = the server's own `_meta["mcpl/class"]`, `override` =
+ * the operator's recipe override; unclassed tools never expose their
+ * arguments to lifecycle observers. `unknown` on an older framework.
+ */
+function formatServerToolClasses(rows: ServerToolClass[] | undefined): string {
+  if (rows === undefined) return 'unknown';
+  const groups = new Map<string, string[]>();
+  for (const r of rows) {
+    const key = r.class.length === 0 ? 'unclassed' : `${r.class.join('+')}/${r.source}`;
+    const names = groups.get(key) ?? [];
+    names.push(r.serverTool || r.tool);
+    groups.set(key, names);
+  }
+  const parts = [...groups.entries()].map(([key, names]) => `${key}: ${names.join(',')}`);
+  return `{${parts.join('; ')}}`;
 }
 
 function formatCapabilityList(paths: string[] | undefined): string {

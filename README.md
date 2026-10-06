@@ -236,6 +236,8 @@ Third-party MCP servers never declare a class, so class them in the recipe:
 
 An unclassed tool is treated as the most restrictive class: observable that it ran, never what it was given.
 
+To check what each tool ended up as, and which of the three sources decided it, run `/tools [agent]`, open the web UI's MCP tab, or `GET /debug/tool-classes`. With `mcplAdmin` enabled, the agent's `mcpl_list` shows the same for each server's tools.
+
 Servers an agent deploys for itself (`mcpl-servers.agent.json`) can never hold either permission. The overlay denies `toolLifecycle` and strips any `toolLifecycle` block, as it already does for context hooks and server-initiated inference. To let such a server observe, the operator moves it into the recipe. These settings take effect with an agent-framework that includes tool lifecycle (anima-research/agent-framework#199); older ones ignore them.
 
 ### Included recipes
@@ -521,12 +523,12 @@ postinstall). Deployment behind a reverse proxy, observer access and all
 endpoints are covered in [`docs/webui-deployment.md`](docs/webui-deployment.md).
 
 - Chat with full interiority: thinking blocks, tool calls + results, live streaming, inline images
-- Sidebar: agent/fleet tree, lessons, MCPL servers (live status and registry), workspace files, context makeup + compression coverage, Settings (live context budget with dry runs), Pins (protected ranges), Health (alerts, per-call stats, compression debt) — each can inspect any fleet child via the "inspecting:" selector
+- Sidebar: agent/fleet tree, lessons, MCPL servers (live status, tool classes and registry), workspace files, context makeup + compression coverage, Settings (live context budget with dry runs), Pins (protected ranges), Health (alerts, per-call stats, compression debt) — each can inspect any fleet child via the "inspecting:" selector
 - Live surgery: roll back to a message, suppress messages, quiesce/resume the host; every action is recorded in an operator log ([`docs/webui-live-surgery.md`](docs/webui-live-surgery.md))
 - Header branch chip opens the Chronicle branch lineage tree (checkout from the UI)
 - Ops alerts (compression quarantine, refusal streaks, inference-exhausted) render as persistent banner rows
 - Usage panel: per-agent costs and a billing-grade call ledger with cache verdicts; quota windows on subscriptions
-- `/healthz` (health JSON for doctor/fleet tooling), `/quota`, `/curve` (compression-curve visualization), `/debug/context/*` ([`docs/debug-context-api.md`](docs/debug-context-api.md)) — authenticated like the rest of the surface, and answerable by a fleet child with `?scope=<child>`
+- `/healthz` (health JSON for doctor/fleet tooling), `/quota`, `/curve` (compression-curve visualization), `/debug/context/*` ([`docs/debug-context-api.md`](docs/debug-context-api.md)), `/debug/tool-classes` — authenticated like the rest of the surface, and answerable by a fleet child with `?scope=<child>`
 - `/debug/retrieval/view` — operator-only per-run lesson selection viewer (see `docs/retrieval-traces.md`)
 - Read-only observer access via Ed25519 device keys with per-grant scopes; the agent can grant and revoke observers itself
 
@@ -564,6 +566,7 @@ headless socket.
 | `/mcp add <id> <cmd> [args...]` | Add or overwrite a registry server (keeps its env) |
 | `/mcp remove <id>` | Remove a registry server |
 | `/mcp env <id> KEY=VALUE [...]` | Set env vars on a registry server |
+| `/tools [agent]` | Each tool's effective MCPL class and where it came from (recipe override, host table, server `_meta`, or unclassed) |
 | `/budget [tokens]` | Show/set stream token budget |
 | `/fast [on\|off\|status]` | Toggle Codex subscription Fast mode |
 | `/session [list\|new\|switch\|rename\|delete]` | Session management; `delete` requires `--confirm` |

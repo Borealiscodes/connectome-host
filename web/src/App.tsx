@@ -8,7 +8,7 @@ import { TreeSidebar } from './TreeSidebar';
 import { StreamPanel, formatStreamEvent, type StreamLine } from './Stream';
 import { UsagePanel } from './Usage';
 import { LessonsPanel, type LessonRow } from './Lessons';
-import { McplPanel, type McplServerRow, type McplLiveRow } from './Mcpl';
+import { McplPanel, type McplServerRow, type McplLiveRow, type ToolClassRow } from './Mcpl';
 import { SettingsPanel, type SettingsState } from './Settings';
 import { DryContext, type DryContextData } from './DryContext';
 import { PinsPanel, type PinsState, type PinCandidate } from './Pins';
@@ -499,6 +499,8 @@ export function App() {
    *  registry file can't express. */
   const [mcplServers, setMcplServers] = createSignal<McplServerRow[]>([]);
   const [mcplLive, setMcplLive] = createSignal<McplLiveRow[]>([]);
+  /** Every tool's effective MCPL class (RFC-008); undefined = older host. */
+  const [mcplToolClasses, setMcplToolClasses] = createSignal<ToolClassRow[] | undefined>(undefined);
   const [mcplLoaded, setMcplLoaded] = createSignal(false);
   const [mcplConfigPath, setMcplConfigPath] = createSignal('');
   const refreshMcpl = (): void => {
@@ -580,6 +582,7 @@ export function App() {
     setMcplLoaded(false);
     setMcplServers([]);
     setMcplLive([]);
+    setMcplToolClasses(undefined);
     setSettingsLoaded(false);
     setSettingsState(null);
     setPinsLoaded(false);
@@ -1141,11 +1144,12 @@ export function App() {
           setLessonsModuleLoaded(moduleLoaded);
           setLessons(list);
         },
-        setMcpl: (configPath, servers, live) => {
+        setMcpl: (configPath, servers, live, toolClasses) => {
           setMcplLoaded(true);
           setMcplConfigPath(configPath);
           setMcplServers(servers);
           setMcplLive(live);
+          setMcplToolClasses(toolClasses);
         },
         setSettings: (state) => {
           setSettingsLoaded(true);
@@ -1596,6 +1600,7 @@ export function App() {
                 configPath={mcplConfigPath()}
                 servers={mcplServers()}
                 live={mcplLive()}
+                toolClasses={mcplToolClasses()}
                 readOnly={panelScope() !== 'local'}
                 onRefresh={refreshMcpl}
                 onAdd={(input) => wire.send({ type: 'mcpl-add', ...input })}
@@ -1704,7 +1709,7 @@ interface HandlerHooks {
   /** Apply a lessons-list response from the server. */
   setLessons: (loaded: boolean, moduleLoaded: boolean, lessons: LessonRow[]) => void;
   /** Apply an mcpl-list response from the server. */
-  setMcpl: (configPath: string, servers: McplServerRow[], live: McplLiveRow[]) => void;
+  setMcpl: (configPath: string, servers: McplServerRow[], live: McplLiveRow[], toolClasses?: ToolClassRow[]) => void;
   /** Apply a settings-state broadcast. */
   setSettings: (state: SettingsState) => void;
   /** Apply a pins-list broadcast. */
@@ -1875,7 +1880,7 @@ function handleServerMessage(
       return;
     case 'mcpl-list':
       if (staleScope(msg.scope, hooks.currentScope())) return;
-      hooks.setMcpl(msg.configPath, msg.servers, msg.live ?? []);
+      hooks.setMcpl(msg.configPath, msg.servers, msg.live ?? [], msg.toolClasses);
       return;
     case 'settings-state':
       if (staleScope(msg.scope, hooks.currentScope())) return;
@@ -2497,6 +2502,7 @@ const COMMANDS: CommandHint[] = [
   { name: '/session', blurb: 'list/new/switch/rename/delete sessions' },
   { name: '/newtopic', blurb: 'reset head window with summary' },
   { name: '/mcp', blurb: 'list/add/remove/env MCPL servers' },
+  { name: '/tools', blurb: 'each tool\'s effective class and its source' },
   { name: '/fleet', blurb: 'list/peek/stop/restart fleet children' },
   { name: '/clear', blurb: 'clear conversation display' },
   { name: '/quit', blurb: 'export lessons + exit' },

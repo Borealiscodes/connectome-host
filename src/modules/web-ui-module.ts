@@ -82,6 +82,7 @@ import {
   resolveAgent,
   buildMediaBlock,
   buildMcplSnapshot,
+  buildToolClassesSnapshot,
   buildSettingsState,
   buildPinsSnapshot,
   buildHealthSnapshot,
@@ -222,6 +223,7 @@ const HTTP_PANEL_OPS: Record<string, string> = {
   '/debug/context/preview': 'context-preview',
   '/debug/context/maintenance': 'context-maintenance',
   '/debug/context': 'debug-context',
+  '/debug/tool-classes': 'tool-classes',
   '/healthz': 'health',
   '/quota': 'quota',
 };
@@ -1110,6 +1112,12 @@ export class WebUiModule implements Module {
       return this.handleDebugContext(url);
     }
 
+    // Each tool's effective MCPL class (RFC-008) and the source that decided
+    // it. Every tool offered, or one agent's surface with ?agent=<name>.
+    if (url.pathname === '/debug/tool-classes') {
+      return this.handleToolClasses(url);
+    }
+
     // Inline image bytes for transcript media refs (see serveMedia). Same
     // sensitivity tier as the transcript itself.
     if (url.pathname.startsWith('/media/')) {
@@ -1212,6 +1220,17 @@ export class WebUiModule implements Module {
     if (!app) return Response.json({ error: 'app not bound yet' }, { status: 503 });
     try {
       return Response.json(buildContextMaintenance(app));
+    } catch (err) {
+      return panelErrorResponse(err);
+    }
+  }
+
+  /** Tool names, classes and class sources — no arguments or results. */
+  private handleToolClasses(url: URL): Response {
+    const app = this.panelApp();
+    if (!app) return Response.json({ error: 'app not bound yet' }, { status: 503 });
+    try {
+      return Response.json(buildToolClassesSnapshot(app, url.searchParams.get('agent') || undefined));
     } catch (err) {
       return panelErrorResponse(err);
     }
@@ -2355,6 +2374,7 @@ export class WebUiModule implements Module {
       configPath: string;
       servers: McplListMessage['servers'];
       live: McplLiveServer[];
+      toolClasses?: McplListMessage['toolClasses'];
     };
     const out: McplListMessage = { type: 'mcpl-list', scope: 'local', ...snap };
     this.send(client, out);
