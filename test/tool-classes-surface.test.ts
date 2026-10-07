@@ -97,7 +97,10 @@ describe('/tools', () => {
     const fw = { listToolClasses: (agent?: string) => { asked.push(agent); return rows; } };
     expect(texts('/tools Custom Import', fw)[0]).toBe('--- Tool classes: 1 tool (Custom Import) ---');
     texts('/tools', fw);
-    expect(asked).toEqual(['Custom Import', undefined]);
+    // Surrounding whitespace is not part of the name; whitespace alone is no name.
+    texts('/tools resident ', fw);
+    texts('/tools   ', fw);
+    expect(asked).toEqual(['Custom Import', undefined, 'resident', undefined]);
   });
 
   test('a framework without the listing says so', () => {

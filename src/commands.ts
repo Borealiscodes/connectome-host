@@ -153,7 +153,10 @@ function inFlightGuard(app: AppContext, cmd: string): CommandResult | null {
 }
 
 export function handleCommand(command: string, app: AppContext): CommandResult {
-  const parts = command.slice(1).split(/\s+/);
+  // Trimmed first: a trailing space (common from headless/web senders) would
+  // otherwise leave an empty last token, and name-taking commands that join
+  // the rest of the line would look up "name " instead of "name".
+  const parts = command.slice(1).trim().split(/\s+/);
   const cmd = parts[0]!;
   const args = parts.slice(1);
   const framework = app.framework;
