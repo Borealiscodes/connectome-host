@@ -29,6 +29,7 @@ import {
 } from '@animalabs/membrane';
 import { LoggingAnthropicAdapter } from './logging-adapter.js';
 import { LoggingProviderAdapter } from './logging-provider-wrapper.js';
+import { mockAdapterConfig } from './mock-provider.js';
 import { gateTelemetryHeaders, stampedTrigger, type TurnTrigger } from './gate-telemetry.js';
 import { LoggingBedrockAdapter } from './logging-bedrock-adapter.js';
 import { CodexSubscriptionAdapter } from './codex-subscription-adapter.js';
@@ -995,16 +996,12 @@ async function main() {
   // provider spend and no credentials (none of the key checks above are
   // gated on it). Echo is the default because it's the informative shape
   // for interactive smoke runs; recipe agent.mock.echoMode=false switches
-  // to defaultResponse for deterministic scripted output. It rides the
+  // to defaultResponse for deterministic scripted output; the delay, chunk
+  // and responseQueue knobs pass through as well (RecipeMockConfig). It rides the
   // generic logging decorator so even mock calls leave llm-calls.jsonl
   // receipts — the observability path is part of what a mock run exercises.
   const mockAdapter = provider === 'mock'
-    ? new MockAdapter({
-        echoMode: recipe.agent.mock?.echoMode ?? true,
-        ...(recipe.agent.mock?.defaultResponse !== undefined
-          ? { defaultResponse: recipe.agent.mock.defaultResponse }
-          : {}),
-      })
+    ? new MockAdapter(mockAdapterConfig(recipe.agent.mock))
     : undefined;
   // -- x-gate-debt-chunks stamp (membrane dynamicHeaders, antra-tess/membrane#65)
   // The gate records compression-debt per ledger row; debt only changes at
