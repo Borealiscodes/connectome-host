@@ -5,7 +5,8 @@
  *   bun src/index.ts                           # Start with saved/default recipe
  *   bun src/index.ts <recipe-url-or-path>      # Load recipe from URL or file
  *   bun src/index.ts --no-recipe               # Start fresh with default recipe
- *   bun src/index.ts --no-tui                  # Readline mode (works in pipes/CI)
+ *   bun src/index.ts --no-tui                  # Readline mode on a terminal
+ *   echo "hi" | bun src/index.ts <recipe>      # Batch mode (any non-TTY stdin): run lines, stop at EOF
  *   bun src/index.ts --headless                # Daemon mode: JSONL over Unix socket at $DATA_DIR/ipc.sock
  *   bun src/index.ts --headless --exit-when-idle   # One-shot: exit when agents go idle after first inference
  *
@@ -56,6 +57,7 @@ import { TtsRelayModule } from './modules/tts-relay-module.js';
 import { InstructionsModule } from './modules/instructions-module.js';
 import { loadMcplServers, applyAgentOverlay, mergeRecipeServers, composeMcplChildEnv, DEFAULT_CONFIG_PATH, DEFAULT_AGENT_OVERLAY_PATH } from './mcpl-config.js';
 import { toolClassConfig } from './tool-lifecycle-config.js';
+import { batchModeStartNotice, batchTeardownNotice, batchWebUiNotice, BATCH_MCPL_LOG_NOTE } from './batch-mode.js';
 import { SessionManager } from './session-manager.js';
 import { resolveAgentName } from './agent-name.js';
 import { generateSessionName } from './synesthete.js';
@@ -692,8 +694,26 @@ function formatMcplLifecycleLine(event: { type: string } & Record<string, unknow
   }
 }
 
+function mcplStderrLogDir(storePath: string): string {
+  return join(storePath, 'mcpl-stderr');
+}
+
+/** Append one timestamped line to a server's mcpl-stderr log. Never rejects:
+ *  logging must not be load-bearing. */
+async function appendMcplLogLine(dir: string, serverId: string, timestamp: number, line: string): Promise<void> {
+  // basename guards against a misconfigured serverId like "../foo" escaping dir.
+  const path = join(dir, `${basename(serverId)}.log`);
+  const entry = `${new Date(timestamp).toISOString()} ${line}\n`;
+  try {
+    await rotateIfNeeded(path, entry.length);
+    await appendFile(path, entry);
+  } catch {
+    // If logging itself fails, don't cascade.
+  }
+}
+
 function setupMcplStderrLog(app: AppContext, storePath: string): void {
-  const dir = join(storePath, 'mcpl-stderr');
+  const dir = mcplStderrLogDir(storePath);
   // Best-effort directory creation — if it fails, per-write attempts will too,
   // and we'll swallow those quietly. We don't want logging to be load-bearing.
   void mkdir(dir, { recursive: true }).catch(() => {});
@@ -703,15 +723,7 @@ function setupMcplStderrLog(app: AppContext, storePath: string): void {
     if (typeof e.serverId !== 'string') return;
     const line = formatMcplLifecycleLine(e);
     if (line === null) return;
-    const iso = new Date(e.timestamp).toISOString();
-    // basename guards against a misconfigured serverId like "../foo" escaping dir.
-    const path = join(dir, `${basename(e.serverId)}.log`);
-    const entry = `${iso} ${line}\n`;
-    void rotateIfNeeded(path, entry.length)
-      .then(() => appendFile(path, entry))
-      .catch(() => {
-        // If logging itself fails, don't cascade.
-      });
+    void appendMcplLogLine(dir, e.serverId, e.timestamp, line);
   });
 }
 
@@ -727,7 +739,7 @@ async function rotateIfNeeded(path: string, incomingBytes: number): Promise<void
 }
 
 // ---------------------------------------------------------------------------
-// Piped/headless mode (--no-tui or non-TTY stdin)
+// Readline / batch mode (--no-tui, or any non-TTY stdin without --headless)
 // ---------------------------------------------------------------------------
 
 async function runPiped(app: AppContext) {
@@ -773,10 +785,14 @@ async function runPiped(app: AppContext) {
 
   function waitForInference(): Promise<void> {
     return new Promise(resolve => {
-      inferenceResolve = resolve;
-      setTimeout(() => {
-        if (inferenceResolve === resolve) { inferenceResolve = null; resolve(); }
+      // The timer only caps the wait. Clear it once the inference settles:
+      // a pending 120 s timer held the event loop open, so a batch run sat
+      // for two minutes after `Done.` before the process exited.
+      const timer = setTimeout(() => {
+        if (inferenceResolve === settle) { inferenceResolve = null; resolve(); }
       }, 120_000);
+      const settle = (): void => { clearTimeout(timer); resolve(); };
+      inferenceResolve = settle;
     });
   }
 
@@ -807,8 +823,11 @@ async function runPiped(app: AppContext) {
     return false;
   }
 
-  // Piped: read all then process
+  // Batch: stdin is not a TTY. Read all, process, then stop — which closes
+  // every MCPL server, so say so: a host started without a terminal (under a
+  // supervisor, say) lands here too, even without --no-tui.
   if (!process.stdin.isTTY) {
+    console.log(batchModeStartNotice());
     const lines: string[] = [];
     const rl = createInterface({ input: process.stdin });
     for await (const line of rl) lines.push(line);
@@ -818,7 +837,23 @@ async function runPiped(app: AppContext) {
       if (await processLine(line)) break;
     }
     console.log('Done.');
+    const serverIds = app.framework.listMcplServers().map((s) => s.id);
+    console.log(batchTeardownNotice(serverIds));
+    const session = app.sessionManager.getActiveSession();
+    if (session) {
+      const dir = mcplStderrLogDir(app.sessionManager.getStorePath(session.id));
+      const now = Date.now();
+      // setupMcplStderrLog creates the directory without awaiting it; a
+      // fresh session with empty stdin can get here first.
+      await mkdir(dir, { recursive: true }).catch(() => {});
+      // Awaited so the note lands before the `connection closed` line.
+      await Promise.all(serverIds.map((id) => appendMcplLogLine(dir, id, now, BATCH_MCPL_LOG_NOTE)));
+    }
     await app.framework.stop();
+    // WebUiModule.stop() leaves the web server up on purpose (it outlives
+    // session switches), and that server keeps the process running.
+    const webUiUrl = getWebUiModule(app.framework)?.listeningUrl();
+    if (webUiUrl) console.log(batchWebUiNotice(webUiUrl));
     return;
   }
 

@@ -200,6 +200,34 @@ Operator-owned recipe/file entries can set `inheritEnv: true` to pass the full h
 
 Check legacy configuration variables before enabling full inheritance. For Discord MCPL, an inherited `DISCORD_SUPPRESS_REACTION_EMOJIS=""` seeds an explicit empty suppression list when its configured filters file does not yet exist; that durable file then overrides the protective baseline. Remove an unintended stale variable before the first startup, or configure the intended suppression in the filters file.
 
+### Feature sets and tool names
+
+An MCPL server declares feature sets, and each server entry chooses which of
+them to enable:
+
+- `enabledFeatureSets` **omitted**: every set the server declares is enabled,
+  subject to the `uses` rule below.
+- `enabledFeatureSets: []` in a recipe or in `mcpl-servers.json`: **no** set is
+  enabled (deny-all). Only the agent's own `mcpl-servers.agent.json` reads an
+  empty list as unset, since strict function calling makes some models send
+  `[]` for "unspecified" (`resolveOverlayEntry` in `src/mcpl-config.ts`).
+- A `*` in a pattern matches exactly one dot-separated segment (`memory.*`
+  matches `memory.retrieval`, not `memory.a.b`). `disabledFeatureSets` wins
+  over `enabledFeatureSets`.
+- A set whose declaration has no `uses`, an empty one or an unrecognized
+  value stays disabled whatever the lists say, as does one whose `uses` names
+  a capability the server was not granted. Each such set is logged on stderr
+  as `[mcpl] <server>/<set> disabled: …`.
+
+The model sees an MCPL server's tools as **`mcpl--<serverId>--<tool>`**:
+that is agent-framework's default prefix, and the host sets none of its own.
+An entry's `toolPrefix` replaces the `mcpl--<serverId>` part. Tool-name
+patterns elsewhere in a recipe match that model-facing form, so
+`toolClassOverrides` keys and `toolLifecycle` `tools` narrowings are written
+`mcpl--blender--*`, not `blender--*`. Host module tools are
+`<module>--<tool>` (`fleet--send`). `enabledTools` and `disabledTools` are
+the exception: they take bare names, as the server exports them.
+
 ### Tool lifecycle and tool classes (MCPL RFC-007 / RFC-008)
 
 An MCPL server can follow the agent's calls to *other* tools: a desktop avatar picking up a prop while a shell command runs, or pointing where the agent clicks. It receives `tools/lifecycle` notifications (`started`, then `completed` / `failed` / `aborted`) and never tool results. Both permissions are **off by default**. A `toolLifecycle` block on the server's entry, in the recipe or in `mcpl-servers.json`, is the grant:
@@ -217,7 +245,7 @@ An MCPL server can follow the agent's calls to *other* tools: a desktop avatar p
 }
 ```
 
-- `observe` sends metadata (tool, class, provider, phase, duration). `{}` means every call. Narrow it with `tools` (name patterns, `*` = any run), `classes`, or `conversations` (agent names).
+- `observe` sends metadata (tool, class, provider, phase, duration). `{}` means every call. Narrow it with `tools` (patterns over model-facing names such as `mcpl--cua--*`, `*` = any run), `classes`, or `conversations` (agent names).
 - `inputs` sends argument fields, but only the fields the server asks for with `tools/observe`. It needs a `tools` or `classes` term to deliver anything (`"default"` = computer, shell, files, web, media, body). It never carries `comms` or unclassed tools' arguments. `maxInputBytes` bounds the payload (default 16 KiB).
 
 A tool's class comes from, in order:
@@ -229,8 +257,8 @@ Third-party MCP servers never declare a class, so class them in the recipe:
 
 ```json
 "toolClassOverrides": {
-  "cua--*": ["computer"],
-  "blender--*": ["media"]
+  "mcpl--cua--*": ["computer"],
+  "mcpl--blender--*": ["media"]
 }
 ```
 
@@ -397,7 +425,7 @@ classic prefill-style prompting for agents migrated from prefill-era bots.
 **Looking after it**
 
 - **Web UI** (`modules.webui`) — browser operator console, below
-- **TUI + readline modes** — OpenTUI interactive terminal, or `--no-tui` for pipes/CI
+- **TUI, readline and batch modes** — OpenTUI interactive terminal, `--no-tui` for a plain prompt, or piped stdin for a one-shot batch run
 - **Headless mode** — `--headless`: no terminal, JSONL over a Unix socket; how residents run under a supervisor
 - **Time-travel** — Chronicle-backed undo/redo, checkpoints, branch exploration; in the web UI, rolling back to a message and suppressing messages
 - **Session management** — isolated sessions with auto-naming
@@ -498,7 +526,7 @@ in the shipped recipes).
 ```bash
 bun src/index.ts                    # Interactive TUI
 bun src/index.ts --no-tui           # Readline mode
-echo "Hello" | bun src/index.ts     # Piped mode
+echo "Hello" | bun src/index.ts     # Batch mode: run each line, then stop
 bun src/index.ts <recipe> --headless                     # Daemon: JSONL IPC over $DATA_DIR/ipc.sock, no terminal
 bun src/index.ts <recipe> --headless --exit-when-idle    # One-shot: exit once the agent goes idle
 bun src/index.ts <recipe> --headless --socket-path <p>   # Custom socket path
@@ -508,6 +536,16 @@ bun --watch src/index.ts            # Dev mode
 Put the recipe before other arguments: the first argument that doesn't start
 with `--` is taken as the recipe. Headless mode, its files and its protocol
 are described in [`docs/fleet-protocol.md`](docs/fleet-protocol.md).
+
+Whenever stdin is not a TTY and `--headless` is absent, the host runs in
+**batch mode**, with or without `--no-tui`: it reads stdin to EOF, runs each
+line, then stops the agent and closes its MCPL servers. `reconnect: true` does
+not bring them back, because an explicit close is not a failure. That
+includes a host started by a supervisor or `nohup` with stdin redirected, so
+anything meant to keep serving needs `--headless`. The host prints a
+`[batch]` line at the start and before the teardown. If the recipe enables
+the web UI, its server outlives the agent by design, so the process keeps
+running, with no agent data behind the page, until interrupted.
 
 ## Web UI
 
