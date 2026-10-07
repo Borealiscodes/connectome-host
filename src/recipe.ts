@@ -1048,6 +1048,12 @@ export interface RecipeSubconscious {
  * recipe can't say: `templateAgent` is always the recipe's own agent, and
  * `strategyFactory` builds a fresh instance of the recipe's `agent.strategy`
  * per fork (strategy instances are stateful and must never be shared).
+ *
+ * @deprecated Per-channel conversation routing is deprecated and will be
+ * removed (agent-framework#235). Its 'mention' bind/trigger rule reads
+ * `metadata.mentioned`, which discord-mcpl does not set, so on Discord
+ * channels an @-mention neither binds a fork nor triggers a bound one. Still
+ * works; the host logs a `[deprecated]` line at startup when it is set.
  */
 export interface RecipeConversations {
   /** When an unbound channel acquires a fork.
@@ -1066,13 +1072,33 @@ export interface RecipeConversations {
     channel?: 'always' | 'mention';
   };
   /** Idle time before a binding expires and the fork runs its closure turn.
-   * Default 12h. */
+   * Default 12h. Expiry is checked at most about once a minute, so the sweep
+   * usually notices an expired binding up to ~60s after the TTL elapses.
+   * That is the usual extra delay, not a deadline for closing the fork: the
+   * closure turn can be delayed further (e.g. while the host is quiesced, it
+   * stays queued until resume). */
   idleTtlMs?: number;
   /** Final system-initiated user message sent to a fork on expiry. */
   closurePrompt?: string;
   /** Prefix for generated fork agent names (default 'conversation'). Also
    * the Chronicle namespace segment, so it is restricted to [A-Za-z0-9_-]. */
   agentPrefix?: string;
+}
+
+/**
+ * Deprecation notices for a recipe's `conversations` block, one
+ * human-readable line each (empty when it is absent). Pure — the host prints
+ * these at startup with a `[deprecated]` prefix.
+ */
+export function deprecatedConversationsNotices(conversations: RecipeConversations | undefined): string[] {
+  if (!conversations) return [];
+  return [
+    'conversations (per-channel conversation routing) is deprecated and not recommended for new ' +
+      'recipes; it will be removed in a later release (agent-framework#235). Its \'mention\' ' +
+      'bind/trigger rule reads metadata.mentioned, which discord-mcpl does not set, so on Discord ' +
+      'channels an @-mention neither binds a fork nor triggers a bound one. Routing still works ' +
+      'as before for now.',
+  ];
 }
 
 export interface Recipe {
@@ -1087,7 +1113,13 @@ export interface Recipe {
   sessionNaming?: { examples?: string[] };
   /** Client-side programmatic tool calling (code_execution tool). */
   codeExecution?: RecipeCodeExecution;
-  /** Per-channel conversation routing — fork-per-channel from this agent. */
+  /**
+   * Per-channel conversation routing — fork-per-channel from this agent.
+   *
+   * @deprecated Deprecated and will be removed (agent-framework#235); see
+   * `RecipeConversations`. Still works; the host logs a `[deprecated]` line
+   * at startup when it is set.
+   */
   conversations?: RecipeConversations;
   /** Tune-out's subconscious resident (agent-framework#77). */
   subconscious?: RecipeSubconscious;
