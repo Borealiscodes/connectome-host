@@ -1,0 +1,83 @@
+{
+  "version": "1.0.0",
+  "title": "Vectorium–Snowman–Connectome Integration Roadmap",
+  "owner": "Borealis S. Hedling",
+  "created": "2026-10-08",
+  "modules": [
+    {
+      "id": "grounded_reasoning_module",
+      "name": "Grounded Reasoning Module",
+      "location": "src/modules/grounded-reasoning/",
+      "status": "pending",
+      "description": "Implements Snowman concept identity, operator algebra, causal constraints, and category-error detection.",
+      "tasks": [
+        "Create module directory structure",
+        "Implement SnowmanConcept invariants",
+        "Implement SnowmanOperators (roll, stack, melt, collapse)",
+        "Implement SnowmanConstraints (gravity, stability)",
+        "Implement CategoryError detector (Lean-aligned)",
+        "Add test suite",
+        "Add documentation",
+        "Add changelog fragment"
+      ],
+      "depends_on": ["lean_formalization"]
+    },
+    {
+      "id": "lean_formalization",
+      "name": "Lean Formal Specification",
+      "location": "VGASP-Snowman/formal/lean/",
+      "status": "complete",
+      "description": "Formal category-error model and operator algebra for grounded reasoning.",
+      "tasks": [
+        "Reference Lean file in Connectome docs",
+        "Map Lean operators to TypeScript operators",
+        "Define category-error equivalence classes"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "vectorium_operator_layer",
+      "name": "Vectorium Operator Layer",
+      "location": "docs/vectorium/",
+      "status": "pending",
+      "description": "System-agnostic reasoning operators for grounded cognition.",
+      "tasks": [
+        "Define operator taxonomy",
+        "Define grounding invariants",
+        "Define causal operator ordering",
+        "Define failure-mode geometry",
+        "Specify system-agnostic API"
+      ],
+      "depends_on": ["grounded_reasoning_module"]
+    },
+    {
+      "id": "connectome_integration",
+      "name": "Connectome Host Integration",
+      "location": "src/",
+      "status": "pending",
+      "description": "Integrates grounded reasoning module into Connectome Host runtime.",
+      "tasks": [
+        "Expose module via Connectome module registry",
+        "Add recipe demonstrating grounded reasoning",
+        "Add example agent using Snowman operators",
+        "Verify behavior via bun test"
+      ],
+      "depends_on": ["grounded_reasoning_module"]
+    },
+    {
+      "id": "pr_submission",
+      "name": "Pull Request Submission",
+      "location": "github.com/anima-research/connectome-host",
+      "status": "pending",
+      "description": "Submit PR following Connectome Host contribution guidelines.",
+      "tasks": [
+        "Prepare PR body (Problem / Changes / Tests / Not Verified / Companion PRs)",
+        "Provide numerical test baseline",
+        "Declare companion PR to VGASP-Snowman",
+        "Submit PR against main",
+        "Respond to review findings"
+      ],
+      "depends_on": ["connectome_integration"]
+    }
+  ]
+}
