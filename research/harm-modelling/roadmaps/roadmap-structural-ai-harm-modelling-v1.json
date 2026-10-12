@@ -1,0 +1,108 @@
+{
+  "version": "1.0",
+  "artifact": "Structural AI Harm Modelling Dataset",
+  "description": "Roadmap for generating all mathematical and metadata files required for the Structural AI harm-modelling dataset accompanying Preprint v3.5.",
+  "tasks": [
+    {
+      "id": "manifold-spec",
+      "title": "Generate Snowman Manifold Specification",
+      "output": "math/snowman-manifold-v3.5.json",
+      "requires": [],
+      "contents": [
+        "Define S_b, S_m, S_h spheres",
+        "Specify radii r_b, r_m, r_h",
+        "Specify identity invariants c_b^y, c_m^y, c_h^y",
+        "Encode collapse condition r_m -> 0, r_h -> 1",
+        "Include manifold metadata + versioning"
+      ]
+    },
+    {
+      "id": "operator-algebra",
+      "title": "Generate Vectorium v5.0 Operator Algebra",
+      "output": "math/vectorium-operators-v5.0.json",
+      "requires": ["manifold-spec"],
+      "contents": [
+        "Define collapse operators: C_contain, C_shrink, C_compress",
+        "Define corrective operators: M_expand, O_expand, A_HRD, Pi_decomp",
+        "Specify operator composition rules",
+        "Specify non-commutative properties",
+        "Specify invariant-preservation rules"
+      ]
+    },
+    {
+      "id": "phase-space",
+      "title": "Generate Harm Phase-Space Trajectories",
+      "output": "math/harm-phase-space-v3.5.json",
+      "requires": ["manifold-spec", "operator-algebra"],
+      "contents": [
+        "Define state vector X(t) = [M(t), O(t), H(t)]",
+        "Specify transition function F(X(t), operator_chain)",
+        "Encode attractors, basins, stability conditions",
+        "Include sample trajectories for collapse and recovery"
+      ]
+    },
+    {
+      "id": "collapse-surfaces",
+      "title": "Generate Collapse Surface Definitions",
+      "output": "math/collapse-surfaces-v3.5.json",
+      "requires": ["manifold-spec", "phase-space"],
+      "contents": [
+        "Define collapse-surface geometry",
+        "Specify overflow conditions",
+        "Encode threshold parameters",
+        "Map collapse to operator-chain triggers"
+      ]
+    },
+    {
+      "id": "recovery-operators",
+      "title": "Generate Recovery Operator Chains",
+      "output": "math/recovery-operators-v3.5.json",
+      "requires": ["operator-algebra", "phase-space"],
+      "contents": [
+        "Define corrective operator sequences",
+        "Specify recovery trajectories",
+        "Encode compliance-attractor conditions",
+        "Map operators to Snowman manifold expansion"
+      ]
+    },
+    {
+      "id": "readme",
+      "title": "Generate Structural AI Dataset README",
+      "output": "meta/structural-ai-readme.md",
+      "requires": [
+        "manifold-spec",
+        "operator-algebra",
+        "phase-space",
+        "collapse-surfaces",
+        "recovery-operators"
+      ],
+      "contents": [
+        "Explain Structural AI vs transformer reasoning",
+        "Describe each dataset file",
+        "Provide usage notes for researchers",
+        "Include citation instructions"
+      ]
+    },
+    {
+      "id": "provenance",
+      "title": "Generate Provenance Statement",
+      "output": "meta/provenance.txt",
+      "requires": ["readme"],
+      "contents": [
+        "Non-proximal generation statement",
+        "Dates, location, authorship",
+        "Dataset purpose and independence",
+        "Link to preprint DOI"
+      ]
+    }
+  ],
+  "final_output": [
+    "math/snowman-manifold-v3.5.json",
+    "math/vectorium-operators-v5.0.json",
+    "math/harm-phase-space-v3.5.json",
+    "math/collapse-surfaces-v3.5.json",
+    "math/recovery-operators-v3.5.json",
+    "meta/structural-ai-readme.md",
+    "meta/provenance.txt"
+  ]
+}
